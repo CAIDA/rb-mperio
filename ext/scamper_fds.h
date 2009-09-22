@@ -37,24 +37,6 @@ typedef struct scamper_fd scamper_fd_t;
 /* when an event occurs, this is the format of the callback used */
 typedef void (*scamper_fd_cb_t)(const int fd, void *param);
 
-/* these functions allocate reference to a socket shared throughout scamper */
-scamper_fd_t *scamper_fd_icmp4(void *addr);
-scamper_fd_t *scamper_fd_icmp6(void *addr);
-scamper_fd_t *scamper_fd_udp4(void *addr, uint16_t sport);
-scamper_fd_t *scamper_fd_udp6(void *addr, uint16_t sport);
-scamper_fd_t *scamper_fd_tcp4(void *addr, uint16_t sport);
-scamper_fd_t *scamper_fd_tcp6(void *addr, uint16_t sport);
-scamper_fd_t *scamper_fd_dl(int ifindex);
-
-#ifndef _WIN32
-scamper_fd_t *scamper_fd_rtsock(void);
-scamper_fd_t *scamper_fd_ifsock(void);
-#endif
-
-/* return information on what the socket is bound to */
-int scamper_fd_ifindex(const scamper_fd_t *fdn, int *ifindex);
-int scamper_fd_sport(const scamper_fd_t *fdn, uint16_t *sport);
-
 /* this function allocates a socket that is exclusively held by the caller */
 scamper_fd_t *scamper_fd_private(int fd,
 				 scamper_fd_cb_t read_cb, void *read_param,
