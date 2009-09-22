@@ -1,0 +1,119 @@
+%struct-type
+%language=C
+%readonly-tables
+%define initializer-suffix ,KC_NONE,KT_NONE
+
+%{
+/*
+** gperf-generated perfect hashing for keywords used in the control socket
+** request/response exchanges.
+**
+** --------------------------------------------------------------------------
+** Author: Young Hyun
+** Copyright (C) 2009 The Regents of the University of California.
+**
+** This program is free software; you can redistribute it and/or modify
+** it under the terms of the GNU General Public License as published by
+** the Free Software Foundation; either version 2 of the License, or
+** (at your option) any later version.
+** 
+** This program is distributed in the hope that it will be useful,
+** but WITHOUT ANY WARRANTY; without even the implied warranty of
+** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+** GNU General Public License for more details.
+** 
+** You should have received a copy of the GNU General Public License
+** along with this program; if not, write to the Free Software
+** Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+*/
+
+#include <string.h>
+
+#include "mper_keywords.h"
+
+const char* keyword_code_names[] = {
+  "<NONE>",
+  "<ERROR>",
+  "<REQNUM>",
+  "<CMD_MIN>",
+  "ping",
+  "cmd_error",
+  "send_error",
+  "resp_timeout",
+  "ping_resp",
+  "<CMD_MAX>",
+  "<OPT_MIN>",
+  "txt",
+  "pkt",
+  "src",
+  "dest",
+  "net",
+  "ttl",
+  "meth",
+  "cksum",
+  "sport",
+  "dport",
+  "udata",
+  "tx",
+  "rx",
+  "probe_ttl",
+  "probe_ipid",
+  "reply_src",
+  "reply_ttl",
+  "reply_ipid",
+  "reply_icmp",
+  "reply_qttl",
+  "reply_tcp",
+  "stop_reason",
+  "stop_data",
+  "<OPT_MAX>",
+};
+
+const char* keyword_type_names[] = {
+  "<none>",
+  "integer",
+  "string",
+  "blob",
+  "symbol",
+  "IP address",
+  "IP prefix",
+  "timeval"
+};
+%}
+
+struct keyword;
+
+%%
+# commands
+ping, KC_PING_CMD, KT_NONE
+cmd_error, KC_CMD_ERROR_CMD, KT_NONE
+send_error, KC_SEND_ERROR_CMD, KT_NONE
+resp_timeout, KC_RESP_TIMEOUT_CMD, KT_NONE
+ping_resp, KC_PING_RESP_CMD, KT_NONE
+#
+# options
+txt, KC_TXT_OPT, KT_STR
+pkt, KC_PKT_OPT, KT_BLOB
+src, KC_SRC_OPT, KT_ADDRESS
+dest, KC_DEST_OPT, KT_ADDRESS
+net, KC_NET_OPT, KT_PREFIX
+ttl, KC_TTL_OPT, KT_UINT
+meth, KC_METH_OPT, KT_SYMBOL
+cksum, KC_CKSUM_OPT, KT_UINT
+sport, KC_SPORT_OPT, KT_UINT
+dport, KC_DPORT_OPT, KT_UINT
+udata, KC_UDATA_OPT, KT_UINT
+tx, KC_TX_OPT, KT_TIMEVAL
+rx, KC_RX_OPT, KT_TIMEVAL
+probe_ttl, KC_PROBE_TTL_OPT, KT_UINT
+probe_ipid, KC_PROBE_IPID_OPT, KT_UINT
+reply_src, KC_REPLY_SRC_OPT, KT_ADDRESS
+reply_ttl, KC_REPLY_TTL_OPT, KT_UINT
+reply_ipid, KC_REPLY_IPID_OPT, KT_UINT
+reply_icmp, KC_REPLY_ICMP_OPT, KT_UINT
+reply_qttl, KC_REPLY_QTTL_OPT, KT_UINT
+reply_tcp, KC_REPLY_TCP_OPT, KT_UINT
+stop_reason, KC_STOP_REASON_OPT, KT_UINT
+stop_data, KC_STOP_DATA_OPT, KT_UINT
+%%
+/* functions */
