@@ -421,35 +421,6 @@ static scamper_fd_t *fd_alloc(int type, int fd)
   return NULL;
 }
 
-/*
- * fd_find
- *
- * search the tree of file descriptors known to scamper for a matching
- * entry.  if one is found, increment its reference count and return it.
- */
-static scamper_fd_t *fd_find(scamper_fd_t *findme)
-{
-  scamper_fd_t *fdn;
-
-  if((fdn = splaytree_find(fd_tree, findme)) != NULL)
-    {
-      /*
-       * the node may be in the refcnt_0 list, or it might be in the read
-       * list itself.  whatever list it is in, remove it from it.
-       */
-      if(fdn->refcnt == 0)
-	{
-	  assert(fdn->read.list != NULL);
-	  dlist_node_eject(fdn->read.list, fdn->read.node);
-	  fdn->read.list = NULL;
-	}
-
-      fdn->refcnt++;
-    }
-
-  return fdn;
-}
-
 static int fdp_list(void *item, void *param)
 {
   ((scamper_fd_poll_t *)item)->list = (dlist_t *)param;

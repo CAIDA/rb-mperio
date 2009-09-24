@@ -65,10 +65,10 @@ typedef int mode_t;
 #include <stdint.h>
 #endif
 
-#include "scamper.h"
 #include "scamper_debug.h"
-#include "scamper_privsep.h"
 #include "utils.h"
+
+#define WITHOUT_PRIVSEP
 
 #ifndef WITHOUT_DEBUGFILE
 static FILE *debugfile = NULL;
