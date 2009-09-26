@@ -611,6 +611,19 @@ mperio_ping_tcp(VALUE self, VALUE vreqnum, VALUE vdest,VALUE vdport)
 }
 
 
+static VALUE
+mperio_send_raw_command(VALUE self, VALUE command)
+{
+  mperio_data_t *data = NULL;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  StringValue(command);
+  send_command(data, RSTRING_PTR(command));
+  return self;
+}
+
+
 static void
 send_command(mperio_data_t *data, const char *message)
 {
@@ -712,6 +725,7 @@ Init_mp_mperio(void)
   rb_define_method(cMperIO, "ping_icmp", mperio_ping_icmp, 2);
   rb_define_method(cMperIO, "ping_icmp_indir", mperio_ping_icmp_indir, 4);
   rb_define_method(cMperIO, "ping_tcp", mperio_ping_tcp, 3);
+  rb_define_method(cMperIO, "send_raw_command", mperio_send_raw_command, 1);
 
   private_class_method_ID = rb_intern("private_class_method");
   private_ID = rb_intern("private");
