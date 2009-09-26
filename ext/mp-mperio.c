@@ -78,10 +78,28 @@
 
 #include "mp-mperio.h"
 
+/*
+** MperIO status:
+**
+** - idle: not running and have never run
+**
+** - running: currently running (client called MperIO#start)
+**
+** - error: some error occurred (and MperIO will be stopping)
+**
+** - stopped: completed stop request (triggered by client calling MperIO#stop),
+**          or the previous MperIO run finished
+*/
+typedef enum {
+  MPERIO_IDLE=0, MPERIO_RUNNING, MPERIO_ERROR, MPERIO_STOPPED
+} mperio_status_t;
+
 typedef struct {
   VALUE delegate;  /* cache of @delegate for speed */
   FILE *log;       /* may be NULL if the user didn't request logging */
-  int mper_error;  /* whether there was an error communicating with mper */
+  mperio_status_t status;
+  int stop_requested;  /* whether client called MperIO#stop */
+
   int mper_fd;
   scamper_fd_t *mper_fdn;  /* wraps mper_fd */
   scamper_linepoll_t *lp;
@@ -121,6 +139,8 @@ mperio_read_cb(int fd, void *param)
   mperio_data_t *data = (mperio_data_t *)param;
   ssize_t n;
 
+  if (data->status != MPERIO_RUNNING) return;
+
   assert(scamper_fd_fd_get(data->mper_fdn) == fd);
 
   n = read(fd, data->read_buf, sizeof(data->read_buf));
@@ -131,13 +151,10 @@ mperio_read_cb(int fd, void *param)
       printerror(errno, strerror, __func__, "read failed");
 #endif
       scamper_fd_read_pause(data->mper_fdn);
-      data->mper_error = 1;
+      scamper_fd_write_pause(data->mper_fdn);
+      data->status = MPERIO_ERROR;
 
-      if (NIL_P(data->delegate)) {
-	rb_raise(rb_eRuntimeError, "no delegate set");
-      }
-      else {
-	char buf[256];
+      { char buf[256];
 	snprintf(buf, sizeof(buf), "error reading from mper: %s",
 		 strerror(errno_saved));
 	rb_funcall(data->delegate, meth_mperio_service_failure, 1,
@@ -150,7 +167,15 @@ mperio_read_cb(int fd, void *param)
   }
   else {  /* n == 0 */
     scamper_fd_read_pause(data->mper_fdn);
-    /* XXX handle EOF */
+    scamper_fd_write_pause(data->mper_fdn);
+
+    /* XXX what else needs to be done on EOF? */
+
+    if (!data->stop_requested) {
+      data->status = MPERIO_ERROR;
+      rb_funcall(data->delegate, meth_mperio_service_failure, 1,
+		 rb_str_new2("lost connection to mper"));
+    }
   }
 }
 
@@ -162,21 +187,19 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
   mperio_data_t *data = (mperio_data_t *)param;
   const control_word_t *resp_words = NULL;
   size_t word_count = 0;
-  char error_msg[128];
+
+  if (data->status != MPERIO_RUNNING) return 0;
 
   if (data->log) {
     fprintf(data->log, "<< %s", (char *)buf);
   }
 
-  if (NIL_P(data->delegate)) {
-    rb_raise(rb_eRuntimeError, "no delegate set");
-  }
- 
   if (strcmp((char *)buf, "MORE") == 0) {
     rb_funcall(data->delegate, meth_mperio_on_more, 0);
   }
   else if (strcmp((char *)buf, "bye!") == 0) {
-    /* XXX disconnect */
+    assert(data->stop_requested);
+    data->status = MPERIO_STOPPED;
   }
   else {
     resp_words = parse_control_message((char *)buf, &word_count);
@@ -202,10 +225,12 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
 	break;
 
       default:
-	snprintf(error_msg, sizeof(error_msg),
-		 "INTERNAL ERROR: unexpected response code %d from mper",
-		 resp_words[1].cw_code);
-	report_error(data, error_msg, resp_words[0].cw_uint, (char *)buf);
+	{ char error_msg[128];
+	  snprintf(error_msg, sizeof(error_msg),
+		   "INTERNAL ERROR: unexpected response code %d from mper",
+		   resp_words[1].cw_code);
+	  report_error(data, error_msg, resp_words[0].cw_uint, (char *)buf);
+	}
 	break;
       }
     }
@@ -221,7 +246,6 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 {
   VALUE result;
   size_t i;
-  char error_msg[128];
 
   assert(resp_words[1].cw_code == KC_RESP_TIMEOUT_CMD ||
 	 resp_words[1].cw_code == KC_PING_RESP_CMD);
@@ -292,19 +316,16 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
       break;
 
     default:
-      snprintf(error_msg, sizeof(error_msg),
-	       "INTERNAL ERROR: unexpected response option %d from mper",
-	       resp_words[i].cw_code);
-      report_error(data, error_msg, resp_words[0].cw_uint, message);
+      { char error_msg[128];
+	snprintf(error_msg, sizeof(error_msg),
+		 "INTERNAL ERROR: unexpected response option %d from mper",
+		 resp_words[i].cw_code);
+	report_error(data, error_msg, resp_words[0].cw_uint, message);
+      }
       return;
     }
 
-    if (NIL_P(data->delegate)) {
-      rb_raise(rb_eRuntimeError, "no delegate set");
-    }
-    else {
-      rb_funcall(data->delegate, meth_mperio_on_data, 1, result);
-    }
+    rb_funcall(data->delegate, meth_mperio_on_data, 1, result);
   }
 }
 
@@ -314,22 +335,17 @@ static void
 mperio_write_error_cb(void *param, int err, scamper_writebuf_t *wb)
 {
   mperio_data_t *data = (mperio_data_t *)param;
+  char buf[256];
 
-  data->mper_error = 1;
+  data->status = MPERIO_ERROR;
 
 #ifndef NDEBUG
   printerror(err, strerror, __func__, "write failed");
 #endif
 
-  if (NIL_P(data->delegate)) {
-    rb_raise(rb_eRuntimeError, "no delegate set");
-  }
-  else {
-    char buf[256];
-    snprintf(buf, sizeof(buf), "error writing to mper: %s", strerror(err));
-    rb_funcall(data->delegate, meth_mperio_service_failure, 1,
-	       rb_str_new2(buf));
-  }
+  snprintf(buf, sizeof(buf), "error writing to mper: %s", strerror(err));
+  rb_funcall(data->delegate, meth_mperio_service_failure, 1,
+	     rb_str_new2(buf));
 }
 
 
@@ -358,14 +374,31 @@ mperio_free(void *data)
   mperio_data_t *mperio_data = (mperio_data_t *)data;
 
   if (mperio_data) {
-    if(mperio_data->wb != NULL) scamper_writebuf_free(mperio_data->wb);
+    if(mperio_data->wb != NULL) {
+      scamper_writebuf_free(mperio_data->wb);
+      mperio_data->wb = NULL;
+    }
 
     /* XXX flush linepoll? (set 2nd argument to 1 to flush) */
-    if(mperio_data->lp != NULL) scamper_linepoll_free(mperio_data->lp, 0);
+    if(mperio_data->lp != NULL) {
+      scamper_linepoll_free(mperio_data->lp, 0);
+      mperio_data->lp = NULL;
+    }
 
-    if (mperio_data->mper_fdn) scamper_fd_free(mperio_data->mper_fdn);
-    if (mperio_data->mper_fd >= 0) close(mperio_data->mper_fd);
-    if (mperio_data->log) fclose(mperio_data->log);
+    if (mperio_data->mper_fdn) {
+      scamper_fd_free(mperio_data->mper_fdn);
+      mperio_data->mper_fdn = NULL;
+    }
+
+    if (mperio_data->mper_fd >= 0) {
+      close(mperio_data->mper_fd);
+      mperio_data->mper_fd = -1;
+    }
+
+    if (mperio_data->log) {
+      fclose(mperio_data->log);
+      mperio_data->log = NULL;
+    }
   }
 }
 
@@ -401,6 +434,7 @@ mperio_init(int argc, VALUE *argv, VALUE self)
   memset(data, 0, sizeof(mperio_data_t));
   data->delegate = Qnil;
   data->log = log;
+  data->status = MPERIO_IDLE;
   data->mper_fd = fd;
   DATA_PTR(self) = data;
 
@@ -503,11 +537,15 @@ mperio_set_delegate(VALUE self, VALUE delegate)
 {
   mperio_data_t *data = NULL;
 
+  Data_Get_Struct(self, mperio_data_t, data);
+  if (NIL_P(delegate) && data->status != MPERIO_IDLE) {
+    rb_raise(rb_eRuntimeError,
+	     "delegate cannot be set to nil after MperIO has started");
+  }
+
   /* Set the instance variable so that the delegate is retained by the GC. */
   rb_ivar_set(self, iv_delegate, delegate);
-
-  Data_Get_Struct(self, mperio_data_t, data);
-  data->delegate = delegate;  /* for performance */
+  data->delegate = delegate;  /* for performance while invoking callbacks */
   return self;
 }
 
@@ -516,12 +554,53 @@ static VALUE
 mperio_start(VALUE self)
 {
   mperio_data_t *data = NULL;
+  struct timeval tv;
+  VALUE retval;
 
   Data_Get_Struct(self, mperio_data_t, data);
   if (NIL_P(data->delegate)) {
     rb_raise(rb_eRuntimeError, "no delegate set");
   }
 
+  if (data->status == MPERIO_STOPPED) {
+    rb_raise(rb_eRuntimeError, "MperIO can only be started once");
+  }
+  else if (data->status != MPERIO_IDLE) {
+    rb_raise(rb_eRuntimeError, "MperIO is already running");
+  }
+
+  scamper_fd_read_set(data->mper_fdn, mperio_read_cb, data);
+  scamper_fd_read_unpause(data->mper_fdn);
+
+  data->status = MPERIO_RUNNING;
+  while (data->status == MPERIO_RUNNING) {
+    tv.tv_sec = 3;
+    tv.tv_usec = 0;
+    if (scamper_fds_poll(&tv) < 0) {
+      data->status = MPERIO_ERROR;
+      rb_funcall(data->delegate, meth_mperio_service_failure, 1,
+		 rb_str_new2("select() failed"));
+    }
+  }
+
+  mperio_free(data);
+  retval = (data->status == MPERIO_STOPPED ? Qtrue : Qnil);
+  data->status = MPERIO_STOPPED;
+  data->stop_requested = 0;
+  return retval;
+}
+
+
+static VALUE
+mperio_stop(VALUE self)
+{
+  mperio_data_t *data = NULL;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+  if (data->status == MPERIO_RUNNING && !data->stop_requested) {
+    send_command(data, "done");
+    data->stop_requested = 1;
+  }
   return self;
 }
 
@@ -722,6 +801,7 @@ Init_mp_mperio(void)
   rb_define_method(cMperIO, "initialize", mperio_init, -1);
   rb_define_method(cMperIO, "delegate=", mperio_set_delegate, 1);
   rb_define_method(cMperIO, "start", mperio_start, 0);
+  rb_define_method(cMperIO, "stop", mperio_stop, 0);
   rb_define_method(cMperIO, "ping_icmp", mperio_ping_icmp, 2);
   rb_define_method(cMperIO, "ping_icmp_indir", mperio_ping_icmp_indir, 4);
   rb_define_method(cMperIO, "ping_tcp", mperio_ping_tcp, 3);
