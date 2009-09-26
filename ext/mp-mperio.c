@@ -164,6 +164,10 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
   size_t word_count = 0;
   char error_msg[128];
 
+  if (data->log) {
+    fprintf(data->log, "<< %s", (char *)buf);
+  }
+
   if (NIL_P(data->delegate)) {
     rb_raise(rb_eRuntimeError, "no delegate set");
   }
@@ -610,6 +614,10 @@ mperio_ping_tcp(VALUE self, VALUE vreqnum, VALUE vdest,VALUE vdport)
 static void
 send_command(mperio_data_t *data, const char *message)
 {
+  if (data->log) {
+    fprintf(data->log, ">> %s\n", message);
+  }
+
   /* XXX somewhat inefficient to do a separate send for just the newline */
   scamper_writebuf_send(data->wb, message, strlen(message));
   scamper_writebuf_send(data->wb, "\n", 1);
