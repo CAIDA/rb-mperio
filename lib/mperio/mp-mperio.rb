@@ -56,23 +56,6 @@
 
 class MperIO
 
-  attr_reader :delegate
-
-  def initialize(port, log_path)
-
-  end
-
-  def delegate=(target)
-    @delegate = target
-  end
-
-  def ping_icmp(reqnum, dest); end
-  def ping_icmp_indir(reqnum, dest, hop, cksum); end
-  def ping_tcp(reqnum, dest, dport); end
-
-
-  #============================================================================
-
   class PingResult
 
     attr_reader :reqnum
