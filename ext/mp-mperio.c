@@ -90,9 +90,13 @@ typedef struct {
   uint8_t read_buf[8192];
 } mperio_data_t;
 
-static VALUE cMperIO;
+static VALUE cMperIO, cPingResult;
 
-static ID iv_delegate_type;
+static ID iv_delegate, iv_reqnum, iv_responded, iv_probe_src, iv_probe_dest;
+static ID iv_udata, iv_tx_sec, iv_tx_usec, iv_rx_sec, iv_rx_usec;
+static ID iv_probe_ttl, iv_probe_ipid, iv_reply_src, iv_reply_ttl;
+static ID iv_reply_qttl, iv_reply_ipid, iv_reply_icmp, iv_reply_tcp;
+
 static ID meth_mperio_on_more, meth_mperio_on_data;
 static ID meth_mperio_on_error, meth_mperio_on_send_error;
 static ID meth_mperio_service_failure;
@@ -100,12 +104,12 @@ static ID meth_mperio_service_failure;
 static int connect_to_mper(int port, int use_tcp);
 static void handle_mper_ping_response(mperio_data_t *data,
 				      const control_word_t *resp_words,
-				      size_tword_count);
+				      size_t word_count, const char *message);
 static void send_command(mperio_data_t *data, const char *message);
-static void report_error(const char *msg_start, uint32_t reqnum,
-			 const char *msg_end);
-static void report_send_error(const char *msg_start, uint32_t reqnum,
-			      const char *msg_end);
+static void report_error(mperio_data_t *data, const char *msg_start,
+			 uint32_t reqnum, const char *msg_end);
+static void report_send_error(mperio_data_t *data, const char *msg_start,
+			      uint32_t reqnum, const char *msg_end);
 static VALUE create_error_message(const char *msg_start, const char *msg_end);
 
 /*=========================================================================*/
@@ -136,7 +140,8 @@ mperio_read_cb(int fd, void *param)
 	char buf[256];
 	snprintf(buf, sizeof(buf), "error reading from mper: %s",
 		 strerror(errno_saved));
-	rb_funcall(data->delegate, meth_service_failure, 1, rb_str_new2(buf));
+	rb_funcall(data->delegate, meth_mperio_service_failure, 1,
+		   rb_str_new2(buf));
       }
     }
   }
@@ -164,36 +169,39 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
   }
  
   if (strcmp((char *)buf, "MORE") == 0) {
-    rb_funcall(data->delegate, meth_on_more, 0);
+    rb_funcall(data->delegate, meth_mperio_on_more, 0);
+  }
+  else if (strcmp((char *)buf, "bye!") == 0) {
+    /* XXX disconnect */
   }
   else {
     resp_words = parse_control_message((char *)buf, &word_count);
     if (word_count == 0) {
-      report_error("couldn't parse mper response", resp_words[0].cw_uint,
+      report_error(data, "couldn't parse mper response", resp_words[0].cw_uint,
 		   resp_words[1].cw_str);
     }
     else {
-      switch (words[1].cw_code) {
+      switch (resp_words[1].cw_code) {
       case KC_CMD_ERROR_CMD:
-	report_error("mper couldn't process our command",
+	report_error(data, "mper couldn't process our command",
 		     resp_words[0].cw_uint, resp_words[1].cw_str);
 	break;
 
       case KC_SEND_ERROR_CMD:
-	report_send_error("send error", resp_words[0].cw_uint,
+	report_send_error(data, "send error", resp_words[0].cw_uint,
 			  resp_words[1].cw_str);
 	break;
 
       case KC_RESP_TIMEOUT_CMD:
       case KC_PING_RESP_CMD:
-	handle_mper_ping_response(data, resp_words, word_count);
+	handle_mper_ping_response(data, resp_words, word_count, (char *)buf);
 	break;
 
       default:
 	snprintf(error_msg, sizeof(error_msg),
 		 "INTERNAL ERROR: unexpected response code %d from mper",
-		 words[1].cw_code);
-	report_error(error_msg, resp_words[0].cw_uint, (char *)buf);
+		 resp_words[1].cw_code);
+	report_error(data, error_msg, resp_words[0].cw_uint, (char *)buf);
 	break;
       }
     }
@@ -204,10 +212,96 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
 
 
 static void
-handle_mper_ping_response(mperio_data_t *data,
-			  const control_word_t *resp_words, size_tword_count)
+handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
+			  size_t word_count, const char *message)
 {
-    rb_funcall(data->delegate, meth_service_failure, 1, rb_str_new2(buf));
+  VALUE result;
+  size_t i;
+  char error_msg[128];
+
+  assert(resp_words[1].cw_code == KC_RESP_TIMEOUT_CMD ||
+	 resp_words[1].cw_code == KC_PING_RESP_CMD);
+
+  result = rb_class_new_instance(0, NULL, cPingResult);
+  rb_ivar_set(result, iv_reqnum, ULONG2NUM(resp_words[0].cw_uint));
+  rb_ivar_set(result, iv_responded,
+	      (resp_words[1].cw_code == KC_PING_RESP_CMD ? Qtrue : Qfalse));
+
+  for (i = 2; i < word_count; i++) {
+    switch (resp_words[i].cw_code) {
+    case KC_SRC_OPT:
+      rb_ivar_set(result, iv_probe_src, rb_str_new2(resp_words[i].cw_address));
+      break;
+
+    case KC_DEST_OPT:
+      rb_ivar_set(result, iv_probe_dest, rb_str_new2(resp_words[i].cw_address));
+      break;
+
+    case KC_UDATA_OPT:
+      rb_ivar_set(result, iv_udata, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_TX_OPT:
+      rb_ivar_set(result, iv_tx_sec,
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+      rb_ivar_set(result, iv_tx_usec,
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_usec));
+      break;
+
+    case KC_RX_OPT:
+      rb_ivar_set(result, iv_rx_sec,
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+      rb_ivar_set(result, iv_rx_usec,
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_usec));
+      break;
+
+    case KC_PROBE_TTL_OPT:
+      rb_ivar_set(result, iv_probe_ttl, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_PROBE_IPID_OPT:
+      rb_ivar_set(result, iv_probe_ipid, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_SRC_OPT:
+      rb_ivar_set(result, iv_reply_src, rb_str_new2(resp_words[i].cw_address));
+      break;
+
+    case KC_REPLY_TTL_OPT:
+      rb_ivar_set(result, iv_reply_ttl, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_IPID_OPT:
+      rb_ivar_set(result, iv_reply_ipid, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_ICMP_OPT:
+      rb_ivar_set(result, iv_reply_icmp, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_QTTL_OPT:
+      rb_ivar_set(result, iv_reply_qttl, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_TCP_OPT:
+      rb_ivar_set(result, iv_reply_tcp, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    default:
+      snprintf(error_msg, sizeof(error_msg),
+	       "INTERNAL ERROR: unexpected response option %d from mper",
+	       resp_words[i].cw_code);
+      report_error(data, error_msg, resp_words[0].cw_uint, message);
+      return;
+    }
+
+    if (NIL_P(data->delegate)) {
+      rb_raise(rb_eRuntimeError, "no delegate set");
+    }
+    else {
+      rb_funcall(data->delegate, meth_mperio_on_data, 1, result);
+    }
+  }
 }
 
 
@@ -229,7 +323,8 @@ mperio_write_error_cb(void *param, int err, scamper_writebuf_t *wb)
   else {
     char buf[256];
     snprintf(buf, sizeof(buf), "error writing to mper: %s", strerror(err));
-    rb_funcall(data->delegate, meth_service_failure, 1, rb_str_new2(buf));
+    rb_funcall(data->delegate, meth_mperio_service_failure, 1,
+	       rb_str_new2(buf));
   }
 }
 
@@ -245,7 +340,7 @@ mperio_write_error_cb(void *param, int err, scamper_writebuf_t *wb)
 static void
 mperio_write_drained_cb(void *param, scamper_writebuf_t *wb)
 {
-  mperio_data_t *data = (mperio_data_t *)param;
+  /* mperio_data_t *data = (mperio_data_t *)param; */
 
   /* XXX */
 }
@@ -259,13 +354,14 @@ mperio_free(void *data)
   mperio_data_t *mperio_data = (mperio_data_t *)data;
 
   if (mperio_data) {
-    if (mperio_data->log) fclose(mperio_data->log);
-    if (mperio_data->mper_fd >= 0) close(mperio_data->mper_fd);
-    if (mperio_data->mper_fdn) scamper_fd_free(mperio_data->mper_fdn);
+    if(mperio_data->wb != NULL) scamper_writebuf_free(mperio_data->wb);
 
     /* XXX flush linepoll? (set 2nd argument to 1 to flush) */
     if(mperio_data->lp != NULL) scamper_linepoll_free(mperio_data->lp, 0);
-    if(mperio_data->wb != NULL) scamper_writebuf_free(mperio_data->wb);
+
+    if (mperio_data->mper_fdn) scamper_fd_free(mperio_data->mper_fdn);
+    if (mperio_data->mper_fd >= 0) close(mperio_data->mper_fd);
+    if (mperio_data->log) fclose(mperio_data->log);
   }
 }
 
@@ -448,7 +544,6 @@ mperio_ping_icmp(VALUE self, VALUE vreqnum, VALUE vdest)
   msg = create_control_message(data->words, CMESSAGE_LEN(2), &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
-
   return self;
 }
 
@@ -480,7 +575,6 @@ mperio_ping_icmp_indir(VALUE self, VALUE vreqnum, VALUE vdest,
   msg = create_control_message(data->words, CMESSAGE_LEN(4), &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
-
   return self;
 }
 
@@ -509,7 +603,6 @@ mperio_ping_tcp(VALUE self, VALUE vreqnum, VALUE vdest,VALUE vdport)
   msg = create_control_message(data->words, CMESSAGE_LEN(3), &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
-
   return self;
 }
 
@@ -524,18 +617,21 @@ send_command(mperio_data_t *data, const char *message)
 
 
 static void
-report_error(const char *msg_start, uint32_t reqnum, const char *msg_end)
+report_error(mperio_data_t *data, const char *msg_start, uint32_t reqnum,
+	     const char *msg_end)
 {
   VALUE msg = create_error_message(msg_start, msg_end);
-  rb_funcall(data->delegate, meth_on_error, 2, ULONG2NUM(reqnum), msg);
+  rb_funcall(data->delegate, meth_mperio_on_error, 2, ULONG2NUM(reqnum), msg);
 }
 
 
 static void
-report_send_error(const char *msg_start, uint32_t reqnum, const char *msg_end)
+report_send_error(mperio_data_t *data, const char *msg_start, uint32_t reqnum,
+		  const char *msg_end)
 {
   VALUE msg = create_error_message(msg_start, msg_end);
-  rb_funcall(data->delegate, meth_on_send_error, 2, ULONG2NUM(reqnum), msg);
+  rb_funcall(data->delegate, meth_mperio_on_send_error, 2,
+	     ULONG2NUM(reqnum), msg);
 }
 
 
@@ -561,18 +657,39 @@ create_error_message(const char *msg_start, const char *msg_end)
 /***************************************************************************/
 /***************************************************************************/
 
+#define IV_INTERN(name) iv_##name = rb_intern("@" #name)
+#define METH_INTERN(name) meth_##name = rb_intern(#name)
+
 void
 Init_mp_mperio(void)
 {
   ID private_class_method_ID, private_ID;
   ID /*new_ID,*/ dup_ID, clone_ID;
 
-  iv_delegate = rb_intern("@delegate");
-  meth_mperio_on_more = rb_intern("mperio_on_more");
-  meth_mperio_on_data = rb_intern("mperio_on_data");
-  meth_mperio_on_error = rb_intern("mperio_on_error");
-  meth_mperio_on_send_error = rb_intern("mperio_on_send_error");
-  meth_mperio_service_failure = rb_intern("mperio_service_failure");
+  IV_INTERN(delegate);
+  IV_INTERN(reqnum);
+  IV_INTERN(responded);
+  IV_INTERN(probe_src);
+  IV_INTERN(probe_dest);
+  IV_INTERN(udata);
+  IV_INTERN(tx_sec);
+  IV_INTERN(tx_usec);
+  IV_INTERN(rx_sec);
+  IV_INTERN(rx_usec);
+  IV_INTERN(probe_ttl);
+  IV_INTERN(probe_ipid);
+  IV_INTERN(reply_src);
+  IV_INTERN(reply_ttl);
+  IV_INTERN(reply_qttl);
+  IV_INTERN(reply_ipid);
+  IV_INTERN(reply_icmp);
+  IV_INTERN(reply_tcp);
+
+  METH_INTERN(mperio_on_more);
+  METH_INTERN(mperio_on_data);
+  METH_INTERN(mperio_on_error);
+  METH_INTERN(mperio_on_send_error);
+  METH_INTERN(mperio_service_failure);
 
   /* XXX make MperIO a singleton */
   /* XXX fix message creation/parsing routines to not use static buffers */
@@ -597,4 +714,10 @@ Init_mp_mperio(void)
   /* rb_funcall(cMperIO, private_class_method_ID, 1, ID2SYM(new_ID)); */
   rb_funcall(cMperIO, private_ID, 1, ID2SYM(dup_ID));
   rb_funcall(cMperIO, private_ID, 1, ID2SYM(clone_ID));
+
+  /*
+  ** The actual definition of PingResult happens in lib/mperio/mp-mperio.rb,
+  ** but we need a VALUE of it so that we can create instances.
+  */
+  cPingResult = rb_define_class_under(cMperIO, "PingResult", rb_cObject);
 }
