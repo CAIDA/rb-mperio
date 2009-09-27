@@ -1,0 +1,157 @@
+#!/usr/bin/env ruby
+
+#############################################################################
+## Pings a given set of targets as a simple test of MperIO.
+##
+#############################################################################
+
+#require 'rubygems'
+$: << "#{ENV['HOME']}/Work/mper/rb-mperio/ext"
+$: << "#{ENV['HOME']}/Work/mper/rb-mperio/lib"
+
+require 'ostruct'
+require 'optparse'
+
+require 'mperio'
+
+$options = OpenStruct.new
+$options.mper_port = 1
+$options.log_path = "mperio.log"
+
+opts = OptionParser.new
+
+opts.on("--targets", "=PATH",
+        "file with target information") do |v|
+  $options.target_path = v
+end
+
+opts.on("--mper-port", "=NUM", Integer,
+	"mper control socket port (#{$options.mper_port})") do |v|
+  $options.mper_port = v
+end
+
+opts.on("--log", "=PATH",
+        "mper command/result message log path (#{$options.log_path})") do |v|
+  $options.log_path = v
+end
+
+opts.on("-v", "--[no-]verbose", TrueClass,  "show detailed progress") do |v|
+  $options.verbose = v
+end
+
+begin
+  ARGV.replace opts.parse(*ARGV)
+rescue OptionParser::ParseError
+  $stderr.puts "ERROR: " + $!
+  $stderr.puts opts
+  exit 1
+end
+
+unless $options.target_path
+  $stderr.puts "ERROR: missing --targets argument"
+  $stderr.puts opts
+  exit 1
+end
+
+
+#============================================================================
+
+class TargetFile
+
+  attr_reader :destination
+
+  def initialize(target_path)
+    @target_path = target_path
+    @target_io = File.open target_path
+    @done = false
+  end
+
+  def next_target
+    return nil if @done
+    loop do
+      line = @target_io.gets
+      if line
+        next if line =~ /^\#/ || line =~ /^\s*$/
+        line.chomp!
+        @destination = line
+        return line
+      else
+        @done = true
+        return nil
+      end
+    end
+  end
+
+end
+
+
+#============================================================================
+
+class Prober
+
+  class TargetID
+    attr_reader :id
+
+    def initialize
+      @id = 1  # don't use id == 0
+    end
+
+    def advance
+      @id += 1  # unlikely to ever wrap... famous last words
+      @id
+    end
+  end
+
+
+  def initialize(mperio, targets)
+    @mperio = mperio
+    @mperio.delegate = self
+    @targets = targets
+    @target_id = TargetID.new
+  end
+
+
+  def start
+    @mperio.start
+  end
+
+
+  def mperio_on_more
+    puts "more"
+    target = @targets.next_target
+    if target
+      puts target
+      @mperio.ping_icmp @target_id.advance, target
+    else
+      @mperio.stop
+    end
+  end
+
+
+  def mperio_on_data(ping_result)
+    printf "mperio_on_data: %p\n", ping_result
+  end
+
+
+  def mperio_on_error(reqnum, message)
+    printf "mperio_on_error: reqnum=%d msg=%s\n", reqnum, message
+  end
+
+
+  def mperio_on_send_error(reqnum, message)
+    printf "mperio_on_send_error: reqnum=%d msg=%s\n", reqnum, message
+  end
+
+
+  def mperio_service_failure(message)
+    printf "mperio_service_failure: %s\n", message
+  end
+
+end
+
+#============================================================================
+
+targets = TargetFile.new $options.target_path
+mperio = MperIO.new $options.mper_port, $options.log_path
+prober = Prober.new mperio, targets
+prober.start
