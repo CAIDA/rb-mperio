@@ -615,7 +615,7 @@ mperio_stop(VALUE self)
   if (data->status == MPERIO_RUNNING && !data->stop_requested) {
     if (data->log) {
       time_t now = time(NULL);
-      fprintf(data->log, "STOP_REQUESTED %ld %s", (long)now, ctime(&now));
+      fprintf(data->log, "STOP_REQUEST %ld %s", (long)now, ctime(&now));
     }
     send_command(data, "done");
     data->stop_requested = 1;
