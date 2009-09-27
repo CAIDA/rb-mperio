@@ -56,6 +56,19 @@
 
 class MperIO
 
+  # Methods implemented in C extension:
+  #
+  #   initialize(port, log_path=nil, use_tcp=nil)
+  #   delegate=(delegate)
+  #   start()
+  #   stop()
+  #   ping_icmp(reqnum, dest)
+  #   ping_icmp_indir(reqnum, dest, hop, cksum)
+  #   ping_tcp(reqnum, dest, dport)
+  #   ping_raw_command(command)
+
+  #..........................................................................
+
   class PingResult
 
     attr_reader :reqnum
