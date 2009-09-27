@@ -191,7 +191,7 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
   if (data->status != MPERIO_RUNNING) return 0;
 
   if (data->log) {
-    fprintf(data->log, "<< %s", (char *)buf);
+    fprintf(data->log, "<< %s\n", (char *)buf);
   }
 
   if (strcmp((char *)buf, "MORE") == 0) {
@@ -324,9 +324,9 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
       }
       return;
     }
-
-    rb_funcall(data->delegate, meth_mperio_on_data, 1, result);
   }
+
+  rb_funcall(data->delegate, meth_mperio_on_data, 1, result);
 }
 
 
@@ -447,6 +447,10 @@ mperio_init(int argc, VALUE *argv, VALUE self)
 	scamper_writebuf_attach(data->wb, data->mper_fdn, data,
 				mperio_write_error_cb,
 				mperio_write_drained_cb);
+	if (data->log) {
+	  time_t now = time(NULL);
+	  fprintf(data->log, "INIT %ld %s", (long)now, ctime(&now));
+	}
 	return self;
       }
       scamper_linepoll_free(data->lp, 0);
@@ -569,6 +573,11 @@ mperio_start(VALUE self)
     rb_raise(rb_eRuntimeError, "MperIO is already running");
   }
 
+  if (data->log) {
+    time_t now = time(NULL);
+    fprintf(data->log, "START %ld %s", (long)now, ctime(&now));
+  }
+
   scamper_fd_read_set(data->mper_fdn, mperio_read_cb, data);
   scamper_fd_read_unpause(data->mper_fdn);
 
@@ -583,10 +592,16 @@ mperio_start(VALUE self)
     }
   }
 
+  if (data->log) {
+    time_t now = time(NULL);
+    fprintf(data->log, "STOP %ld %s", (long)now, ctime(&now));
+  }
+
   mperio_free(data);
   retval = (data->status == MPERIO_STOPPED ? Qtrue : Qnil);
   data->status = MPERIO_STOPPED;
   data->stop_requested = 0;
+
   return retval;
 }
 
@@ -598,6 +613,10 @@ mperio_stop(VALUE self)
 
   Data_Get_Struct(self, mperio_data_t, data);
   if (data->status == MPERIO_RUNNING && !data->stop_requested) {
+    if (data->log) {
+      time_t now = time(NULL);
+      fprintf(data->log, "STOP_REQUESTED %ld %s", (long)now, ctime(&now));
+    }
     send_command(data, "done");
     data->stop_requested = 1;
   }
