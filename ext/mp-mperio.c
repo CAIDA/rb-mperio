@@ -764,6 +764,32 @@ mperio_ping_tcp(VALUE self, VALUE vreqnum, VALUE vdest,VALUE vdport)
 
 
 static VALUE
+mperio_ping_udp(VALUE self, VALUE vreqnum, VALUE vdest)
+{
+  mperio_data_t *data = NULL;
+  uint32_t reqnum;
+  const char *dest;
+  const char *msg = NULL;
+  size_t msg_len = 0;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  reqnum = (uint32_t)NUM2ULONG(vreqnum);
+  StringValue(vdest);
+  dest = RSTRING_PTR(vdest);
+
+  INIT_CMESSAGE(data->words, reqnum, PING);
+  SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
+  SET_SYMBOL_CWORD(data->words, 2, METH, "udp");
+
+  msg = create_control_message(data->words, CMESSAGE_LEN(2), &msg_len);
+  assert(msg_len != 0);
+  send_command(data, msg);
+  return self;
+}
+
+
+static VALUE
 mperio_send_raw_command(VALUE self, VALUE command)
 {
   mperio_data_t *data = NULL;
@@ -879,6 +905,7 @@ Init_mp_mperio(void)
   rb_define_method(cMperIO, "ping_icmp", mperio_ping_icmp, 2);
   rb_define_method(cMperIO, "ping_icmp_indir", mperio_ping_icmp_indir, 4);
   rb_define_method(cMperIO, "ping_tcp", mperio_ping_tcp, 3);
+  rb_define_method(cMperIO, "ping_udp", mperio_ping_udp, 2);
   rb_define_method(cMperIO, "send_raw_command", mperio_send_raw_command, 1);
 
   private_class_method_ID = rb_intern("private_class_method");
