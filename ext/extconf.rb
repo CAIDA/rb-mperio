@@ -30,4 +30,4 @@ common_headers = []
 common_headers << "stdint.h" if have_stdint
 common_headers << "unistd.h" if have_unistd
 
-create_makefile("mperio")
+create_makefile("mperioext")
