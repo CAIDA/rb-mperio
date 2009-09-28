@@ -725,7 +725,7 @@ mperio_ping_icmp_indir(VALUE self, VALUE vreqnum, VALUE vdest,
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
-  SET_UINT_CWORD(data->words, 3, PROBE_TTL, hop);
+  SET_UINT_CWORD(data->words, 3, TTL, hop);
   SET_UINT_CWORD(data->words, 4, CKSUM, cksum);
 
   msg = create_control_message(data->words, CMESSAGE_LEN(4), &msg_len);
