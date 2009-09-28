@@ -85,19 +85,25 @@
 **
 ** - running: currently running (client called MperIO#start)
 **
+** - suspended: suspended event processing upon request (client called
+**            MperIO#suspend)
+**
+** - stopped: fully handled stop request (triggered by client calling
+**            MperIO#stop); the stopped status is persistent across runs,
+**            so a stopped status may mean the previous MperIO run finished
+**
 ** - error: some error occurred (and MperIO will be stopping)
 **
-** - stopped: completed stop request (triggered by client calling MperIO#stop),
-**          or the previous MperIO run finished
 */
 typedef enum {
-  MPERIO_IDLE=0, MPERIO_RUNNING, MPERIO_ERROR, MPERIO_STOPPED
+  MPERIO_IDLE=0, MPERIO_RUNNING, MPERIO_SUSPENDED, MPERIO_STOPPED, MPERIO_ERROR
 } mperio_status_t;
 
 typedef struct {
   VALUE delegate;  /* cache of @delegate for speed */
   FILE *log;       /* may be NULL if the user didn't request logging */
   mperio_status_t status;
+  int suspend_requested;  /* whether client called MperIO#suspend */
   int stop_requested;  /* whether client called MperIO#stop */
 
   int mper_fd;
@@ -566,43 +572,90 @@ mperio_start(VALUE self)
     rb_raise(rb_eRuntimeError, "no delegate set");
   }
 
-  if (data->status == MPERIO_STOPPED) {
-    rb_raise(rb_eRuntimeError, "MperIO can only be started once");
-  }
-  else if (data->status != MPERIO_IDLE) {
-    rb_raise(rb_eRuntimeError, "MperIO is already running");
-  }
-
-  if (data->log) {
-    time_t now = time(NULL);
-    fprintf(data->log, "START %ld %s", (long)now, ctime(&now));
-  }
-
-  scamper_fd_read_set(data->mper_fdn, mperio_read_cb, data);
-  scamper_fd_read_unpause(data->mper_fdn);
-
-  data->status = MPERIO_RUNNING;
-  while (data->status == MPERIO_RUNNING) {
-    tv.tv_sec = 3;
-    tv.tv_usec = 0;
-    if (scamper_fds_poll(&tv) < 0) {
-      data->status = MPERIO_ERROR;
-      rb_funcall(data->delegate, meth_mperio_service_failure, 1,
-		 rb_str_new2("select() failed"));
+  switch (data->status) {
+  case MPERIO_IDLE:
+  case MPERIO_SUSPENDED:
+    if (data->log) {
+      time_t now = time(NULL);
+      const char *event = (data->status == MPERIO_IDLE ? "START" : "RESUME");
+      fprintf(data->log, "%s %ld %s", event, (long)now, ctime(&now));
     }
+
+    scamper_fd_read_set(data->mper_fdn, mperio_read_cb, data);
+    scamper_fd_read_unpause(data->mper_fdn);
+
+    if (data->status == MPERIO_SUSPENDED) {
+      data->status = MPERIO_RUNNING;
+      rb_funcall(data->delegate, meth_mperio_on_more, 0);
+    }
+    else {
+      data->status = MPERIO_RUNNING;
+    }
+
+    while (data->status == MPERIO_RUNNING) {
+      tv.tv_sec = 3;
+      tv.tv_usec = 0;
+      if (scamper_fds_poll(&tv) < 0) {
+	data->status = MPERIO_ERROR;
+	rb_funcall(data->delegate, meth_mperio_service_failure, 1,
+		   rb_str_new2("select() failed"));
+      }
+
+      if (data->status == MPERIO_RUNNING && data->suspend_requested) {
+	data->status = MPERIO_SUSPENDED;
+	data->suspend_requested = 0;
+      }
+    }
+
+    if (data->log) {
+      time_t now = time(NULL);
+      const char *event =
+	(data->status == MPERIO_SUSPENDED ? "SUSPEND" : "STOP");
+      fprintf(data->log, "%s %ld %s", event, (long)now, ctime(&now));
+    }
+
+    if (data->status == MPERIO_SUSPENDED) {
+      retval = Qtrue;
+    }
+    else {
+      mperio_free(data);
+      retval = (data->status == MPERIO_STOPPED ? Qtrue : Qnil);
+      data->status = MPERIO_STOPPED;
+      data->stop_requested = 0;
+    }
+    return retval;
+
+  case MPERIO_RUNNING:
+    rb_raise(rb_eRuntimeError, "MperIO is already running");
+
+  case MPERIO_STOPPED:
+    rb_raise(rb_eRuntimeError,
+	     "MperIO cannot be restarted after being stopped");
+
+  case MPERIO_ERROR:
+    rb_raise(rb_eRuntimeError, "MperIO cannot be restarted after an error");
+
+  default:
+    rb_fatal("INTERNAL ERROR: invalid MperIO status");
   }
+}
 
-  if (data->log) {
-    time_t now = time(NULL);
-    fprintf(data->log, "STOP %ld %s", (long)now, ctime(&now));
+
+static VALUE
+mperio_suspend(VALUE self)
+{
+  mperio_data_t *data = NULL;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+  if (data->status == MPERIO_RUNNING && !data->suspend_requested
+      && !data->stop_requested) {
+    if (data->log) {
+      time_t now = time(NULL);
+      fprintf(data->log, "SUSPEND_REQUEST %ld %s", (long)now, ctime(&now));
+    }
+    data->suspend_requested = 1;
   }
-
-  mperio_free(data);
-  retval = (data->status == MPERIO_STOPPED ? Qtrue : Qnil);
-  data->status = MPERIO_STOPPED;
-  data->stop_requested = 0;
-
-  return retval;
+  return self;
 }
 
 
@@ -618,6 +671,7 @@ mperio_stop(VALUE self)
       fprintf(data->log, "STOP_REQUEST %ld %s", (long)now, ctime(&now));
     }
     send_command(data, "done");
+    data->suspend_requested = 0;  /* stop overrides any pending suspend */
     data->stop_requested = 1;
   }
   return self;
@@ -820,6 +874,7 @@ Init_mp_mperio(void)
   rb_define_method(cMperIO, "initialize", mperio_init, -1);
   rb_define_method(cMperIO, "delegate=", mperio_set_delegate, 1);
   rb_define_method(cMperIO, "start", mperio_start, 0);
+  rb_define_method(cMperIO, "suspend", mperio_suspend, 0);
   rb_define_method(cMperIO, "stop", mperio_stop, 0);
   rb_define_method(cMperIO, "ping_icmp", mperio_ping_icmp, 2);
   rb_define_method(cMperIO, "ping_icmp_indir", mperio_ping_icmp_indir, 4);
