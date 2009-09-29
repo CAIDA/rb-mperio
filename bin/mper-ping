@@ -5,9 +5,12 @@
 ##
 #############################################################################
 
-#require 'rubygems'
-$: << "#{ENV['HOME']}/Work/mper/rb-mperio/ext"
-$: << "#{ENV['HOME']}/Work/mper/rb-mperio/lib"
+if $0 =~ /dev$/
+  $: << "#{ENV['HOME']}/Work/mper/rb-mperio/ext"
+  $: << "#{ENV['HOME']}/Work/mper/rb-mperio/lib"
+else
+  require 'rubygems'
+end
 
 require 'ostruct'
 require 'optparse'
