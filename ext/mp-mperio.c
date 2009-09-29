@@ -126,6 +126,9 @@ static ID meth_mperio_on_error, meth_mperio_on_send_error;
 static ID meth_mperio_service_failure;
 
 static int connect_to_mper(int port, int use_tcp);
+static const char* extract_txt_option(mperio_data_t *data,
+				      const control_word_t *resp_words,
+				      size_t word_count, const char *message);
 static void handle_mper_ping_response(mperio_data_t *data,
 				      const control_word_t *resp_words,
 				      size_t word_count, const char *message);
@@ -216,13 +219,18 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
     else {
       switch (resp_words[1].cw_code) {
       case KC_CMD_ERROR_CMD:
-	report_error(data, "mper couldn't process our command",
-		     resp_words[0].cw_uint, resp_words[1].cw_str);
+	{ const char *txt = extract_txt_option(data, resp_words,
+					       word_count, (char *)buf);
+	  report_error(data, "mper couldn't process our command",
+		       resp_words[0].cw_uint, txt);
+	}
 	break;
 
       case KC_SEND_ERROR_CMD:
-	report_send_error(data, "send error", resp_words[0].cw_uint,
-			  resp_words[1].cw_str);
+	{ const char *txt = extract_txt_option(data, resp_words,
+					       word_count, (char *)buf);
+	  report_send_error(data, "send error", resp_words[0].cw_uint, txt);
+	}
 	break;
 
       case KC_RESP_TIMEOUT_CMD:
@@ -243,6 +251,24 @@ mperio_read_line_cb(void *param, uint8_t *buf, size_t len)
   }
 
   return 0;  /* the return value isn't used in any way */
+}
+
+
+static const char*
+extract_txt_option(mperio_data_t *data, const control_word_t *resp_words,
+		   size_t word_count, const char *message)
+{
+  size_t i;
+
+  for (i = 2; i < word_count; i++) {
+    if (resp_words[i].cw_code == KC_TXT_OPT) {
+      return resp_words[i].cw_str;
+    }
+  }
+
+  /* This shouldn't happen, but I'm not sure reporting an internal error
+     via report_error() is the right thing to do. */
+  return "<<mper error message unavailable>>";
 }
 
 
