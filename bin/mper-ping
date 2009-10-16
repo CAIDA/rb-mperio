@@ -19,6 +19,7 @@ require 'mperio'
 
 $options = OpenStruct.new
 $options.mper_port = 1
+$options.probing_method = :icmp
 $options.log_path = "mperio.log"
 
 opts = OptionParser.new
@@ -26,6 +27,23 @@ opts = OptionParser.new
 opts.on("--targets", "=PATH",
         "file with target information") do |v|
   $options.target_path = v
+end
+
+opts.on("--icmp", TrueClass, "probe with ICMP echo request (default)") do |v|
+  $options.probing_method = :icmp
+end
+
+opts.on("--tcp", TrueClass, "probe with TCP ACK") do |v|
+  $options.probing_method = :tcp
+end
+
+opts.on("--udp", TrueClass, "probe with UDP") do |v|
+  $options.probing_method = :udp
+end
+
+opts.on("--dport", "=NUM", Integer,
+	"destination port for TCP probes (default: 80)") do |v|
+  $options.dport = v
 end
 
 opts.on("--mper-port", "=NUM", Integer,
@@ -124,7 +142,19 @@ class Prober
     target = @targets.next_target
     if target
       puts target
-      @mperio.ping_icmp @target_id.advance, target
+      case $options.probing_method
+      when :icmp
+        @mperio.ping_icmp @target_id.advance, target
+
+      when :tcp
+        @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80)
+
+      when :udp
+        # nil dport => let mper choose a dport
+        @mperio.ping_udp @target_id.advance, target
+
+      else fail "INTERNAL ERROR: invalid probing method"
+      end
     else
       @mperio.stop
     end
