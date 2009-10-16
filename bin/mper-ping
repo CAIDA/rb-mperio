@@ -137,8 +137,9 @@ class Prober
     end
 
     def advance
+      @retval = @id
       @id += 1  # unlikely to ever wrap... famous last words
-      @id
+      @retval
     end
   end
 
@@ -159,10 +160,10 @@ class Prober
 
 
   def mperio_on_more
-    puts "more"
+    puts "more" if $options.verbose
     target = @targets.next_target
     if target
-      puts target
+      printf "probing %s @ %d\n", target, @target_id.id if $options.verbose
       case $options.probing_method
       when :icmp
         @mperio.ping_icmp @target_id.advance, target
@@ -185,7 +186,24 @@ class Prober
 
 
   def mperio_on_data(ping_result)
-    printf "mperio_on_data: %p\n", ping_result
+    printf "mperio_on_data: %p\n", ping_result if $options.verbose
+
+    if ping_result.responded?
+      printf "%d.%06d >%s <%s >ipid=%d <ipid=%d ",
+        ping_result.rx_sec, ping_result.rx_usec, ping_result.probe_dest,
+        ping_result.reply_src, ping_result.probe_ipid, ping_result.reply_ipid
+
+      if ping_result.icmp_reply?
+        printf "icmp %d:%d\n", ping_result.reply_icmp_type,
+          ping_result.reply_icmp_code
+      else # ping_result.tcp_reply?
+        printf "tcp %s\n", ping_result.decompose_tcp_flags.join(", ")
+      end
+    else
+      printf "%d.%06d >%s timeout\n", ping_result.tx_sec, ping_result.tx_usec,
+        ping_result.probe_dest
+    end
+
     @active_count -= 1
     @mperio.stop if @active_count == 0
   end
