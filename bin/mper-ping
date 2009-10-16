@@ -67,13 +67,6 @@ rescue OptionParser::ParseError
   exit 1
 end
 
-unless $options.target_path
-  $stderr.puts "ERROR: missing --targets argument"
-  $stderr.puts opts
-  exit 1
-end
-
-
 #============================================================================
 
 class TargetFile
@@ -107,6 +100,33 @@ end
 
 #============================================================================
 
+class ImmediateTargets
+
+  attr_reader :destination
+
+  def initialize(targets)
+    @targets = targets
+  end
+
+  def next_target
+    loop do
+      return nil if @targets.empty?
+
+      target = @targets.shift
+      if target =~ /^\d+\.\d+\.\d+\.\d+$/
+        @destination = target
+        return target
+      else
+        $stderr.puts "ERROR: skipping invalid target '" + target + "'"
+      end
+    end
+  end
+
+end
+
+
+#============================================================================
+
 class Prober
 
   class TargetID
@@ -128,6 +148,8 @@ class Prober
     @mperio.delegate = self
     @targets = targets
     @target_id = TargetID.new
+
+    @active_count = 0
   end
 
 
@@ -154,36 +176,51 @@ class Prober
 
       else fail "INTERNAL ERROR: invalid probing method"
       end
+
+      @active_count += 1
     else
-      @mperio.stop
+      @mperio.stop if @active_count == 0
     end
   end
 
 
   def mperio_on_data(ping_result)
     printf "mperio_on_data: %p\n", ping_result
+    @active_count -= 1
+    @mperio.stop if @active_count == 0
   end
 
 
   def mperio_on_error(reqnum, message)
-    printf "mperio_on_error: reqnum=%d msg=%s\n", reqnum, message
+    $stderr.printf "mperio_on_error: reqnum=%d msg=%s\n", reqnum, message
+    @mperio.stop
+    exit 1
   end
 
 
   def mperio_on_send_error(reqnum, message)
-    printf "mperio_on_send_error: reqnum=%d msg=%s\n", reqnum, message
+    $stderr.printf "mperio_on_send_error: reqnum=%d msg=%s\n", reqnum, message
+    @active_count -= 1
+    @mperio.stop if @active_count == 0
   end
 
 
   def mperio_service_failure(message)
-    printf "mperio_service_failure: %s\n", message
+    $stderr.printf "mperio_service_failure: %s\n", message
+    @mperio.stop
+    exit 1
   end
 
 end
 
 #============================================================================
 
-targets = TargetFile.new $options.target_path
+if $options.target_path
+  targets = TargetFile.new $options.target_path
+else
+  targets = ImmediateTargets.new ARGV
+end
+
 mperio = MperIO.new $options.mper_port, $options.log_path
 prober = Prober.new mperio, targets
 prober.start
