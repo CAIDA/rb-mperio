@@ -20,7 +20,7 @@ require 'mperio'
 $options = OpenStruct.new
 $options.mper_port = 1
 $options.probing_method = :icmp
-$options.log_path = "mperio.log"
+$options.log_path = nil  # disable logging by default
 
 opts = OptionParser.new
 
@@ -51,8 +51,7 @@ opts.on("--mper-port", "=NUM", Integer,
   $options.mper_port = v
 end
 
-opts.on("--log", "=PATH",
-        "mper command/result message log path (#{$options.log_path})") do |v|
+opts.on("--log", "=PATH", "mper command/result message log path") do |v|
   $options.log_path = v
 end
 
