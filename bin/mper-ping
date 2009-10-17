@@ -24,6 +24,10 @@ $options.log_path = nil  # disable logging by default
 
 opts = OptionParser.new
 
+opts.on("--full", TrueClass, "show full result output") do |v|
+  $options.full_output = v
+end
+
 opts.on("--targets", "=PATH",
         "file with target information") do |v|
   $options.target_path = v
@@ -126,6 +130,30 @@ end
 
 
 #============================================================================
+class ProgressOutput
+
+  def self.probe_info(target, technique, result)
+    # NOTE: The probe_ipid value is meaningless for a non-response.
+    sprintf "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%d.%06d",
+      result.reqnum, target, technique, result.probe_src, result.probe_dest,
+      result.probe_ttl, (result.probe_ipid || 0), result.tx_sec, result.tx_usec
+  end
+
+  def self.reply_info(result)
+    qttl = (result.reply_qttl || "-").to_s
+    icmp_type = (result.reply_icmp_type || "-").to_s
+    icmp_code = (result.reply_icmp_code || "-").to_s
+    tcp_flags = (result.reply_tcp_flags || "-").to_s
+
+    sprintf "%s\t%d\t%s\t%d\t%s\t%s\t%s\t0\t%d.%06d",
+      result.reply_src, result.reply_ttl, qttl, result.reply_ipid,
+      icmp_type, icmp_code, tcp_flags, result.rx_sec, result.rx_usec
+  end
+
+end
+
+
+#============================================================================
 
 class Prober
 
@@ -150,6 +178,7 @@ class Prober
     @targets = targets
     @target_id = TargetID.new
 
+    @technique = $options.probing_method.to_s + "-dir"
     @active_count = 0
   end
 
@@ -185,23 +214,33 @@ class Prober
   end
 
 
-  def mperio_on_data(ping_result)
-    printf "mperio_on_data: %p\n", ping_result if $options.verbose
+  def mperio_on_data(result)
+    printf "mperio_on_data: %p\n", result if $options.verbose
 
-    if ping_result.responded?
-      printf "%d.%06d >%s <%s >ipid=%d <ipid=%d ",
-        ping_result.rx_sec, ping_result.rx_usec, ping_result.probe_dest,
-        ping_result.reply_src, ping_result.probe_ipid, ping_result.reply_ipid
-
-      if ping_result.icmp_reply?
-        printf "icmp %d:%d\n", ping_result.reply_icmp_type,
-          ping_result.reply_icmp_code
-      else # ping_result.tcp_reply?
-        printf "tcp %s\n", ping_result.decompose_tcp_flags.join(", ")
+    if $options.full_output
+      target = result.probe_dest
+      probe_info = ProgressOutput.probe_info target, @technique, result
+      if result.responded?
+        reply_info = ProgressOutput.reply_info result
+        printf "T\t%s\t%s\n", probe_info, reply_info
+      else
+        printf "N\t%s\n", probe_info
       end
     else
-      printf "%d.%06d >%s timeout\n", ping_result.tx_sec, ping_result.tx_usec,
-        ping_result.probe_dest
+      if result.responded?
+        printf "%d.%06d >%s <%s >ipid=%d <ipid=%d ",
+          result.rx_sec, result.rx_usec, result.probe_dest,
+          result.reply_src, result.probe_ipid, result.reply_ipid
+
+        if result.icmp_reply?
+          printf "icmp %d:%d\n", result.reply_icmp_type, result.reply_icmp_code
+        else # result.tcp_reply?
+          printf "tcp %s\n", result.decompose_tcp_flags.join(", ")
+        end
+      else
+        printf "%d.%06d >%s timeout\n", result.tx_sec, result.tx_usec,
+          result.probe_dest
+      end
     end
 
     @active_count -= 1
