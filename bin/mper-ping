@@ -228,9 +228,11 @@ class Prober
       end
     else
       if result.responded?
+        reply_src = (result.reply_src == result.probe_dest ? " " :
+                     result.reply_src)
         printf "%d.%06d >%-15s <%-15s >ipid=%5d <ipid=%5d ",
           result.rx_sec, result.rx_usec, result.probe_dest,
-          result.reply_src, result.probe_ipid, result.reply_ipid
+          reply_src, result.probe_ipid, result.reply_ipid
 
         if result.icmp_reply?
           printf "icmp %d:%d\n", result.reply_icmp_type, result.reply_icmp_code
