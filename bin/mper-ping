@@ -228,11 +228,13 @@ class Prober
       end
     else
       if result.responded?
-        reply_src = (result.reply_src == result.probe_dest ? " " :
-                     result.reply_src)
-        printf "%d.%06d >%-15s <%-15s >ipid=%5d <ipid=%5d ",
-          result.rx_sec, result.rx_usec, result.probe_dest,
-          reply_src, result.probe_ipid, result.reply_ipid
+        printf "%d.%03d >%-15s >ipid=%5d <ipid=%5d ", result.rx_sec,
+          result.rx_usec.quo(1000.0), result.probe_dest, result.probe_ipid,
+          result.reply_ipid
+
+        if result.reply_src != result.probe_dest
+          printf "<%-15s ", result.reply_src 
+        end
 
         if result.icmp_reply?
           printf "icmp %d:%d\n", result.reply_icmp_type, result.reply_icmp_code
@@ -240,8 +242,8 @@ class Prober
           printf "tcp %s\n", result.decompose_tcp_flags.join(", ")
         end
       else
-        printf "%d.%06d >%s timeout\n", result.tx_sec, result.tx_usec,
-          result.probe_dest
+        printf "%d.%03d >%s timeout\n", result.tx_sec,
+          result.tx_usec.quo(1000.0), result.probe_dest
       end
     end
 
