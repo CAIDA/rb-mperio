@@ -24,6 +24,6 @@
 #ifndef __MP_MPERIO_H
 #define __MP_MPERIO_H
 
-void Init_mp_mperio(void);
+void Init_mperio(void);
 
 #endif  /* __MP_MPERIO_H */

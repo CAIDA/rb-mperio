@@ -29,10 +29,10 @@
 #endif
 
 #include "scamper_fds.h"
-#include "mp-mperio.h"
+#include "mperio.h"
 
 void Init_mperioext(void)
 {
   scamper_fds_init();
-  Init_mp_mperio();
+  Init_mperio();
 }

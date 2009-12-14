@@ -76,7 +76,7 @@
 #include "scamper_writebuf.h"
 #include "utils.h"
 
-#include "mp-mperio.h"
+#include "mperio.h"
 
 /*
 ** MperIO status:
@@ -945,7 +945,7 @@ Init_mp_mperio(void)
   rb_funcall(cMperIO, private_ID, 1, ID2SYM(clone_ID));
 
   /*
-  ** The actual definition of PingResult happens in lib/mperio/mp-mperio.rb,
+  ** The actual declaration of PingResult happens in lib/mperio.rb,
   ** but we need a VALUE of it so that we can create instances.
   */
   cPingResult = rb_define_class_under(cMperIO, "PingResult", rb_cObject);
