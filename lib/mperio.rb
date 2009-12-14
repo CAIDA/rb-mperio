@@ -108,7 +108,7 @@ class MperIO
 
   # Called by initialize in the C extension.
   def setup_source_state
-    $stderr.puts "setup_source_state called"
+    # $stderr.puts "setup_source_state called"
     @sources = {}  # source => Unix fd
     @fd_to_source = {}  # Unix fd => source
     @suspend_on_idle = false  # suspend event loop if all sources are idle
@@ -117,7 +117,7 @@ class MperIO
 
   # Called by start() in the C extension.
   def prepare_sources
-    $stderr.puts "prepare_sources called"
+    # $stderr.puts "prepare_sources called"
     defunct_sources = []
 
     idle = true
@@ -150,13 +150,13 @@ class MperIO
 
 
   def source_read_data(fd)
-    $stderr.puts "source_read_data(#{fd}) called"
+    # $stderr.puts "source_read_data(#{fd}) called"
     @fd_to_source[fd].read_data()
   end
 
 
   def source_write_data(fd)
-    $stderr.puts "source_write_data(#{fd}) called"
+    # $stderr.puts "source_write_data(#{fd}) called"
     @fd_to_source[fd].write_data()
   end
 
