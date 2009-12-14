@@ -6,7 +6,7 @@ require 'rubygems'
 
 #---------------------------------------------------------------------------
 
-MY_VERSION = "0.0.1"
+MY_VERSION = "0.1.0"
 
 MY_EXTRA_FILES = ["README", "CHANGES", "COPYING"]
 

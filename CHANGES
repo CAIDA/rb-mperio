@@ -1,3 +1,5 @@
-version x.x.x, 2009-xx-xx
-  * xxx
+version 0.1.0, 2009-12-14
+  * added support for using rb-mperio as a generic nonblocking I/O event loop
+    (specifically to handle nonblocking I/O for Marinda::Client)
+
 

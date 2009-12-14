@@ -112,7 +112,13 @@ typedef struct {
   scamper_writebuf_t *wb;
   control_word_t words[MPER_MSG_MAX_WORDS];
   uint8_t read_buf[8192];
+
+  int external_sources_count;
+  int external_source_original_fd[FD_SETSIZE];  /* dup fd => original fd */
+  scamper_fd_t *external_sources[FD_SETSIZE];   /* original fd => fdn */
+
 } mperio_data_t;
+
 
 static VALUE cMperIO, cPingResult;
 
@@ -120,6 +126,9 @@ static ID iv_delegate, iv_reqnum, iv_responded, iv_probe_src, iv_probe_dest;
 static ID iv_udata, iv_tx_sec, iv_tx_usec, iv_rx_sec, iv_rx_usec;
 static ID iv_probe_ttl, iv_probe_ipid, iv_reply_src, iv_reply_ttl;
 static ID iv_reply_qttl, iv_reply_ipid, iv_reply_icmp, iv_reply_tcp;
+
+static ID meth_setup_source_state, meth_prepare_sources;
+static ID meth_source_read_data, meth_source_write_data;
 
 static ID meth_mperio_on_more, meth_mperio_on_data;
 static ID meth_mperio_on_error, meth_mperio_on_send_error;
@@ -404,6 +413,7 @@ static void
 mperio_free(void *data)
 {
   mperio_data_t *mperio_data = (mperio_data_t *)data;
+  int i;
 
   if (mperio_data) {
     if(mperio_data->wb != NULL) {
@@ -430,6 +440,12 @@ mperio_free(void *data)
     if (mperio_data->log) {
       fclose(mperio_data->log);
       mperio_data->log = NULL;
+    }
+
+    for (i = 0; i < FD_SETSIZE; i++) {
+      if (mperio_data->external_sources[i]) {
+	scamper_fd_free(mperio_data->external_sources[i]);
+      }
     }
   }
 }
@@ -479,6 +495,7 @@ mperio_init(int argc, VALUE *argv, VALUE self)
 	scamper_writebuf_attach(data->wb, data->mper_fdn, data,
 				mperio_write_error_cb,
 				mperio_write_drained_cb);
+	rb_funcall(self, meth_setup_source_state, 0);
 	if (data->log) {
 	  time_t now = time(NULL);
 	  fprintf(data->log, "INIT %ld %s", (long)now, ctime(&now));
@@ -619,6 +636,15 @@ mperio_start(VALUE self)
     }
 
     while (data->status == MPERIO_RUNNING) {
+      if (data->external_sources_count > 0) {
+	rb_funcall(self, meth_prepare_sources, 0);
+	if (data->suspend_requested) {  /* support suspend_on_idle feature */
+	  data->status = MPERIO_SUSPENDED;
+	  data->suspend_requested = 0;
+	  break;
+	}
+      }
+
       tv.tv_sec = 3;
       tv.tv_usec = 0;
       if (scamper_fds_poll(&tv) < 0) {
@@ -880,13 +906,161 @@ create_error_message(const char *msg_start, const char *msg_end)
 
 
 /***************************************************************************/
+
+static void
+external_source_read_cb(const int fd, void *param)
+{
+  VALUE self = (VALUE)param;
+  mperio_data_t *data = NULL;
+  int original_fd;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  original_fd = data->external_source_original_fd[fd];
+  rb_funcall(self, meth_source_read_data, 1, INT2FIX(original_fd));
+}
+
+
+static void
+external_source_write_cb(const int fd, void *param)
+{
+  VALUE self = (VALUE)param;
+  mperio_data_t *data = NULL;
+  int original_fd;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  original_fd = data->external_source_original_fd[fd];
+  rb_funcall(self, meth_source_write_data, 1, INT2FIX(original_fd));
+}
+
+
+static VALUE
+mperio_allocate_scamper_fdn(VALUE self, VALUE fd_value)
+{
+  mperio_data_t *data = NULL;
+  int fd, fd_dup;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  fd = FIX2INT(fd_value);
+  fd_dup = dup(fd);
+  if (fd_dup < 0) {
+    rb_sys_fail(NULL);
+  }
+
+  data->external_sources_count += 1;
+  data->external_source_original_fd[fd_dup] = fd;
+  data->external_sources[fd] = scamper_fd_private(fd_dup,
+                                      external_source_read_cb, (void*)self,
+                                      external_source_write_cb, (void*)self);
+
+  scamper_fd_read_pause(data->external_sources[fd]);
+  scamper_fd_write_pause(data->external_sources[fd]);
+  return self;
+}
+
+
+static VALUE
+mperio_deallocate_scamper_fdn(VALUE self, VALUE fd_value)
+{
+  mperio_data_t *data = NULL;
+  int fd;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  fd = FIX2INT(fd_value);
+  if (fd <= 0 || fd >= FD_SETSIZE || !data->external_sources[fd]) {
+    rb_raise(rb_eArgError, "invalid file descriptor");
+  }
+
+  data->external_sources_count -= 1;
+  scamper_fd_free(data->external_sources[fd]);
+  data->external_sources[fd] = NULL;
+  return self;
+}
+
+
+static VALUE
+mperio_read_pause(VALUE self, VALUE fd_value)
+{
+  mperio_data_t *data = NULL;
+  int fd;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  fd = FIX2INT(fd_value);
+  if (fd <= 0 || fd >= FD_SETSIZE || !data->external_sources[fd]) {
+    rb_raise(rb_eArgError, "invalid file descriptor");
+  }
+
+  scamper_fd_read_pause(data->external_sources[fd]);
+  return self;
+}
+
+
+static VALUE
+mperio_read_unpause(VALUE self, VALUE fd_value)
+{
+  mperio_data_t *data = NULL;
+  int fd;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  fd = FIX2INT(fd_value);
+  if (fd <= 0 || fd >= FD_SETSIZE || !data->external_sources[fd]) {
+    rb_raise(rb_eArgError, "invalid file descriptor");
+  }
+
+  scamper_fd_read_unpause(data->external_sources[fd]);
+  return self;
+}
+
+
+static VALUE
+mperio_write_pause(VALUE self, VALUE fd_value)
+{
+  mperio_data_t *data = NULL;
+  int fd;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  fd = FIX2INT(fd_value);
+  if (fd <= 0 || fd >= FD_SETSIZE || !data->external_sources[fd]) {
+    rb_raise(rb_eArgError, "invalid file descriptor");
+  }
+
+  scamper_fd_write_pause(data->external_sources[fd]);
+  return self;
+}
+
+
+static VALUE
+mperio_write_unpause(VALUE self, VALUE fd_value)
+{
+  mperio_data_t *data = NULL;
+  int fd;
+
+  Data_Get_Struct(self, mperio_data_t, data);
+
+  fd = FIX2INT(fd_value);
+  if (fd <= 0 || fd >= FD_SETSIZE || !data->external_sources[fd]) {
+    rb_raise(rb_eArgError, "invalid file descriptor");
+  }
+
+  scamper_fd_write_unpause(data->external_sources[fd]);
+  return self;
+}
+
+
+/***************************************************************************/
 /***************************************************************************/
 
 #define IV_INTERN(name) iv_##name = rb_intern("@" #name)
 #define METH_INTERN(name) meth_##name = rb_intern(#name)
 
 void
-Init_mp_mperio(void)
+Init_mperio(void)
 {
   ID private_class_method_ID, private_ID;
   ID /*new_ID,*/ dup_ID, clone_ID;
@@ -909,6 +1083,11 @@ Init_mp_mperio(void)
   IV_INTERN(reply_ipid);
   IV_INTERN(reply_icmp);
   IV_INTERN(reply_tcp);
+
+  METH_INTERN(setup_source_state);
+  METH_INTERN(prepare_sources);
+  METH_INTERN(source_read_data);
+  METH_INTERN(source_write_data);
 
   METH_INTERN(mperio_on_more);
   METH_INTERN(mperio_on_data);
@@ -933,6 +1112,16 @@ Init_mp_mperio(void)
   rb_define_method(cMperIO, "ping_tcp", mperio_ping_tcp, 3);
   rb_define_method(cMperIO, "ping_udp", mperio_ping_udp, 2);
   rb_define_method(cMperIO, "send_raw_command", mperio_send_raw_command, 1);
+
+  /* XXX make private */
+  rb_define_method(cMperIO, "allocate_scamper_fdn",
+		   mperio_allocate_scamper_fdn, 1);
+  rb_define_method(cMperIO, "deallocate_scamper_fdn",
+		   mperio_deallocate_scamper_fdn, 1);
+  rb_define_method(cMperIO, "read_pause", mperio_read_pause, 1);
+  rb_define_method(cMperIO, "read_unpause", mperio_read_unpause, 1);
+  rb_define_method(cMperIO, "write_pause", mperio_write_pause, 1);
+  rb_define_method(cMperIO, "write_unpause", mperio_write_unpause, 1);
 
   private_class_method_ID = rb_intern("private_class_method");
   private_ID = rb_intern("private");

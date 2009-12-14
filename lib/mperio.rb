@@ -59,7 +59,9 @@ require "mperioext"
 
 class MperIO
 
-  # Methods implemented in C extension:
+  attr_accessor :suspend_on_idle
+
+  # Public methods implemented in C extension:
   #
   #   initialize(port, log_path=nil, use_tcp=nil)
   #   delegate=(delegate)
@@ -69,8 +71,98 @@ class MperIO
   #   ping_icmp_indir(reqnum, dest, hop, cksum)
   #   ping_tcp(reqnum, dest, dport)
   #   ping_raw_command(command)
+  #
+  # Private methods implemented in C extension:
+  #
+  #   allocate_scamper_fdn(fd)
+  #   deallocate_scamper_fdn(fd)
+  #   read_pause(fd)
+  #   read_unpause(fd)
+  #   write_pause(fd)
+  #   write_unpause(fd)
+
+  # A source should implement the following methods:
+  #
+  #   * io() => return IO object or nil if source has failed/finished,
+  #   * want_read() => true if the source wants to perform a read,
+  #   * want_write() => true if the source wants to perform a write,
+  #   * read_data() => perform nonblocking read, and
+  #   * write_data() => perform nonblocking write.
+  #
+  def add_source(source)
+    fd = source.io.fileno
+    @sources[source] = fd
+    @fd_to_source[fd] = source
+    allocate_scamper_fdn fd
+  end
+
+
+  def remove_source(source)
+    fd = @sources.delete source
+    @fd_to_source.delete fd
+    deallocate_scamper_fdn fd
+  end
+
+
+  private #..................................................................
+
+  # Called by initialize in the C extension.
+  def setup_source_state
+    $stderr.puts "setup_source_state called"
+    @sources = {}  # source => Unix fd
+    @fd_to_source = {}  # Unix fd => source
+    @suspend_on_idle = false  # suspend event loop if all sources are idle
+  end
+
+
+  # Called by start() in the C extension.
+  def prepare_sources
+    $stderr.puts "prepare_sources called"
+    defunct_sources = []
+
+    idle = true
+    @sources.each_key do |source|
+      if source.io
+        if source.want_read
+          idle = false
+          read_unpause source.io.fileno
+        else
+          read_pause source.io.fileno
+        end
+
+        if source.want_write
+          idle = false
+          write_unpause source.io.fileno
+        else
+          write_pause source.io.fileno
+        end
+      else
+        defunct_sources << source
+      end
+    end
+
+    defunct_sources.each do |source|
+      remove_source source
+    end
+
+    suspend() if idle && @suspend_on_idle
+  end
+
+
+  def source_read_data(fd)
+    $stderr.puts "source_read_data(#{fd}) called"
+    @fd_to_source[fd].read_data()
+  end
+
+
+  def source_write_data(fd)
+    $stderr.puts "source_write_data(#{fd}) called"
+    @fd_to_source[fd].write_data()
+  end
+
 
   #..........................................................................
+  public
 
   class PingResult
 
