@@ -2,4 +2,12 @@ version 0.1.0, 2009-12-14
   * added support for using rb-mperio as a generic nonblocking I/O event loop
     (specifically to handle nonblocking I/O for Marinda::Client)
 
+version 0.0.2, 2009-xx-xx
+  * improved mper-ping:
+     - added support for specifying the probing method
+     - added support for targets on command line
+     - added --full output
+
+version 0.0.1, 2009-09-28
+  * initial version
 
