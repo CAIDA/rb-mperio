@@ -20,6 +20,7 @@ require 'mperio'
 $options = OpenStruct.new
 $options.mper_port = 1
 $options.probing_method = :icmp
+$options.spacing = 0
 $options.log_path = nil  # disable logging by default
 
 opts = OptionParser.new
@@ -36,6 +37,11 @@ end
 opts.on("--concurrency", "=NUM", Integer,
         "max targets to probe concurrently (default: unlimited)") do |v|
   $options.concurrency = v
+end
+
+opts.on("--spacing", "=NUM", Integer,
+        "spacing (ms) between probes (default: #{$options.spacing})") do |v|
+  $options.spacing = v
 end
 
 opts.on("--icmp", TrueClass, "probe with ICMP echo request (default)") do |v|
@@ -71,7 +77,7 @@ end
 begin
   ARGV.replace opts.parse(*ARGV)
 rescue OptionParser::ParseError
-  $stderr.puts "ERROR: " + $!
+  $stderr.puts "ERROR: " + $!.to_s
   $stderr.puts opts
   exit 1
 end
@@ -207,14 +213,15 @@ class Prober
       printf "probing %s @ %d\n", target, @target_id.id if $options.verbose
       case $options.probing_method
       when :icmp
-        @mperio.ping_icmp @target_id.advance, target
+        @mperio.ping_icmp @target_id.advance, target, $options.spacing
 
       when :tcp
-        @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80)
+        @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80),
+          $options.spacing
 
       when :udp
         # nil dport => let mper choose a dport
-        @mperio.ping_udp @target_id.advance, target
+        @mperio.ping_udp @target_id.advance, target, $options.spacing
 
       else fail "INTERNAL ERROR: invalid probing method"
       end

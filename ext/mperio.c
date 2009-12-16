@@ -731,26 +731,31 @@ mperio_stop(VALUE self)
 
 
 static VALUE
-mperio_ping_icmp(VALUE self, VALUE vreqnum, VALUE vdest)
+mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  uint32_t reqnum;
+  VALUE vreqnum, vdest, vspacing;
+  uint32_t reqnum, spacing;
   const char *dest;
   const char *msg = NULL;
   size_t msg_len = 0;
 
   Data_Get_Struct(self, mperio_data_t, data);
+  rb_scan_args(argc, argv, "21", &vreqnum, &vdest, &vspacing);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
+  spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
+  if (spacing > 2147483647) { spacing = 2147483647; }
 
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
-  SET_UINT_CWORD(data->words, 3, SPACING, 500);
+  if (spacing > 0) SET_UINT_CWORD(data->words, 3, SPACING, spacing);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(3), &msg_len);
+  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 3 : 2),
+			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -758,31 +763,35 @@ mperio_ping_icmp(VALUE self, VALUE vreqnum, VALUE vdest)
 
 
 static VALUE
-mperio_ping_icmp_indir(VALUE self, VALUE vreqnum, VALUE vdest,
-		       VALUE vhop, VALUE vcksum)
+mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  uint32_t reqnum, hop, cksum;
+  VALUE vreqnum, vdest, vhop, vcksum, vspacing;
+  uint32_t reqnum, hop, cksum, spacing;
   const char *dest;
   const char *msg = NULL;
   size_t msg_len = 0;
 
   Data_Get_Struct(self, mperio_data_t, data);
+  rb_scan_args(argc, argv, "41", &vreqnum, &vdest, &vhop, &vcksum, &vspacing);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
   hop = (uint32_t)NUM2ULONG(vhop);
   cksum = (uint32_t)NUM2ULONG(vcksum);
+  spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
+  if (spacing > 2147483647) { spacing = 2147483647; }
 
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
   SET_UINT_CWORD(data->words, 3, TTL, hop);
   SET_UINT_CWORD(data->words, 4, CKSUM, cksum);
-  SET_UINT_CWORD(data->words, 5, SPACING, 500);
+  if (spacing > 0) SET_UINT_CWORD(data->words, 5, SPACING, spacing);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(5), &msg_len);
+  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 5 : 4),
+			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -790,28 +799,33 @@ mperio_ping_icmp_indir(VALUE self, VALUE vreqnum, VALUE vdest,
 
 
 static VALUE
-mperio_ping_tcp(VALUE self, VALUE vreqnum, VALUE vdest,VALUE vdport)
+mperio_ping_tcp(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  uint32_t reqnum, dport;
+  VALUE vreqnum, vdest, vdport, vspacing;
+  uint32_t reqnum, dport, spacing;
   const char *dest;
   const char *msg = NULL;
   size_t msg_len = 0;
 
   Data_Get_Struct(self, mperio_data_t, data);
+  rb_scan_args(argc, argv, "31", &vreqnum, &vdest, &vdport, &vspacing);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
   dport = (uint32_t)NUM2ULONG(vdport);
+  spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
+  if (spacing > 2147483647) { spacing = 2147483647; }
 
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "tcp-ack");
   SET_UINT_CWORD(data->words, 3, DPORT, dport);
-  SET_UINT_CWORD(data->words, 4, SPACING, 500);
+  if (spacing > 0) SET_UINT_CWORD(data->words, 4, SPACING, spacing);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(4), &msg_len);
+  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 4 : 3),
+			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -819,25 +833,31 @@ mperio_ping_tcp(VALUE self, VALUE vreqnum, VALUE vdest,VALUE vdport)
 
 
 static VALUE
-mperio_ping_udp(VALUE self, VALUE vreqnum, VALUE vdest)
+mperio_ping_udp(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  uint32_t reqnum;
+  VALUE vreqnum, vdest, vspacing;
+  uint32_t reqnum, spacing;
   const char *dest;
   const char *msg = NULL;
   size_t msg_len = 0;
 
   Data_Get_Struct(self, mperio_data_t, data);
+  rb_scan_args(argc, argv, "21", &vreqnum, &vdest, &vspacing);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
+  spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
+  if (spacing > 2147483647) { spacing = 2147483647; }
 
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "udp");
+  if (spacing > 0) SET_UINT_CWORD(data->words, 3, SPACING, spacing);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(2), &msg_len);
+  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 3 : 2),
+			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -1110,10 +1130,10 @@ Init_mperio(void)
   rb_define_method(cMperIO, "start", mperio_start, 0);
   rb_define_method(cMperIO, "suspend", mperio_suspend, 0);
   rb_define_method(cMperIO, "stop", mperio_stop, 0);
-  rb_define_method(cMperIO, "ping_icmp", mperio_ping_icmp, 2);
-  rb_define_method(cMperIO, "ping_icmp_indir", mperio_ping_icmp_indir, 4);
-  rb_define_method(cMperIO, "ping_tcp", mperio_ping_tcp, 3);
-  rb_define_method(cMperIO, "ping_udp", mperio_ping_udp, 2);
+  rb_define_method(cMperIO, "ping_icmp", mperio_ping_icmp, -1);
+  rb_define_method(cMperIO, "ping_icmp_indir", mperio_ping_icmp_indir, -1);
+  rb_define_method(cMperIO, "ping_tcp", mperio_ping_tcp, -1);
+  rb_define_method(cMperIO, "ping_udp", mperio_ping_udp, -1);
   rb_define_method(cMperIO, "send_raw_command", mperio_send_raw_command, 1);
 
   /* XXX make private */

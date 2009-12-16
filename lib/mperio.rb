@@ -67,9 +67,10 @@ class MperIO
   #   delegate=(delegate)
   #   start()
   #   stop()
-  #   ping_icmp(reqnum, dest)
-  #   ping_icmp_indir(reqnum, dest, hop, cksum)
-  #   ping_tcp(reqnum, dest, dport)
+  #   ping_icmp(reqnum, dest, spacing=0)
+  #   ping_icmp_indir(reqnum, dest, hop, cksum, spacing=0)
+  #   ping_tcp(reqnum, dest, dport, spacing=0)
+  #   ping_udp(reqnum, dest, spacing=0)
   #   ping_raw_command(command)
   #
   # Private methods implemented in C extension:
