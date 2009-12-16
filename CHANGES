@@ -1,3 +1,7 @@
+version 0.2.0, 2009-12-15
+  * added --spacing: spacing (ms) between probes
+  * added --concurrency: max targets to probe concurrently
+
 version 0.1.0, 2009-12-14
   * added support for using rb-mperio as a generic nonblocking I/O event loop
     (specifically to handle nonblocking I/O for Marinda::Client)
