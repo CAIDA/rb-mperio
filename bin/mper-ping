@@ -33,6 +33,11 @@ opts.on("--targets", "=PATH",
   $options.target_path = v
 end
 
+opts.on("--concurrency", "=NUM", Integer,
+        "max targets to probe concurrently (default: unlimited)") do |v|
+  $options.concurrency = v
+end
+
 opts.on("--icmp", TrueClass, "probe with ICMP echo request (default)") do |v|
   $options.probing_method = :icmp
 end
@@ -180,6 +185,7 @@ class Prober
 
     @technique = $options.probing_method.to_s + "-dir"
     @active_count = 0
+    @reached_concurrency = false
   end
 
 
@@ -190,6 +196,12 @@ class Prober
 
   def mperio_on_more
     puts "more" if $options.verbose
+
+    if $options.concurrency && @active_count >= $options.concurrency
+      @reached_concurrency = true
+      return  # submit next task in mperio_on_data when a slot becomes free
+    end
+
     target = @targets.next_target
     if target
       printf "probing %s @ %d\n", target, @target_id.id if $options.verbose
@@ -248,6 +260,11 @@ class Prober
     end
 
     @active_count -= 1
+    if @reached_concurrency
+      @reached_concurrency = false
+      mperio_on_more()
+    end
+
     @mperio.stop if @active_count == 0
   end
 
