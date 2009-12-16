@@ -748,8 +748,9 @@ mperio_ping_icmp(VALUE self, VALUE vreqnum, VALUE vdest)
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
+  SET_UINT_CWORD(data->words, 3, SPACING, 500);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(2), &msg_len);
+  msg = create_control_message(data->words, CMESSAGE_LEN(3), &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -779,8 +780,9 @@ mperio_ping_icmp_indir(VALUE self, VALUE vreqnum, VALUE vdest,
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
   SET_UINT_CWORD(data->words, 3, TTL, hop);
   SET_UINT_CWORD(data->words, 4, CKSUM, cksum);
+  SET_UINT_CWORD(data->words, 5, SPACING, 500);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(4), &msg_len);
+  msg = create_control_message(data->words, CMESSAGE_LEN(5), &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -807,8 +809,9 @@ mperio_ping_tcp(VALUE self, VALUE vreqnum, VALUE vdest,VALUE vdport)
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "tcp-ack");
   SET_UINT_CWORD(data->words, 3, DPORT, dport);
+  SET_UINT_CWORD(data->words, 4, SPACING, 500);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(3), &msg_len);
+  msg = create_control_message(data->words, CMESSAGE_LEN(4), &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
