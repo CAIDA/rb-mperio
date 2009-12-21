@@ -21,9 +21,9 @@
 ** $Id: scping.h,v 1.1 2008/10/04 22:11:41 youngh Exp $
 **/
 
-#ifndef __MP_MPERIO_H
-#define __MP_MPERIO_H
+#ifndef __MPERIO_H
+#define __MPERIO_H
 
 void Init_mperio(void);
 
-#endif  /* __MP_MPERIO_H */
+#endif  /* __MPERIO_H */
