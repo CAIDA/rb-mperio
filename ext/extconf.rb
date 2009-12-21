@@ -25,9 +25,11 @@ require 'mkmf'
 
 have_stdint = have_header("stdint.h")
 have_unistd = have_header("unistd.h")
+have_time = have_header("time.h")
 
 common_headers = []
 common_headers << "stdint.h" if have_stdint
 common_headers << "unistd.h" if have_unistd
+common_headers << "time.h" if have_time
 
 create_makefile("mperioext")

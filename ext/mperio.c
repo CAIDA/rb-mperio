@@ -44,6 +44,10 @@
 #include <netinet/tcp.h>  /* for TCP_NODELAY */
 #endif
 
+#if defined(HAVE_TIME_H)
+#include <time.h>
+#endif
+
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
