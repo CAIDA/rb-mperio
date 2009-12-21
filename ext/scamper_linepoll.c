@@ -25,22 +25,14 @@
  * 
  */
 
-#include <sys/types.h>
+#include "systypes.h"
 
 #ifndef _WIN32
 #include <netinet/in.h>
 #endif
 
-#if defined(_MSC_VER)
-typedef unsigned __int8 uint8_t;
-#endif
-
 #include <stdlib.h>
 #include <string.h>
-
-#if defined(__APPLE__)
-#include <stdint.h>
-#endif
 
 #include <assert.h>
 

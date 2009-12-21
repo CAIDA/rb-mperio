@@ -29,15 +29,20 @@ typedef unsigned __int32 uint32_t;
 typedef int ssize_t;
 typedef int pid_t;
 typedef int socklen_t;
+typedef int mode_t;
 #define __func__ __FUNCTION__
+#endif
+
+#if defined(__APPLE__)
+#define _BSD_SOCKLEN_T_
 #endif
 
 #include <sys/types.h>
 
-#ifndef _WIN32
+#if defined(HAVE_UNISTD_H)
 #include <unistd.h>
 #endif
 
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(HAVE_STDINT_H)
 #include <stdint.h>
 #endif

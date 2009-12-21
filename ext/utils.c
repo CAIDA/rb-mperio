@@ -21,26 +21,18 @@
  * 
  */
 
-#if defined(_MSC_VER)
-typedef unsigned __int8 uint8_t;
-typedef unsigned __int16 uint16_t;
-typedef unsigned __int64 uint64_t;
-typedef int ssize_t;
-#endif
+#include "systypes.h"
 
 #if defined(__APPLE__)
-#define _BSD_SOCKLEN_T_
 #define HAVE_SOCKADDR_SA_LEN
 #define HAVE_OSSWAPINT16
 #include <libkern/OSByteOrder.h>
-#include <stdint.h>
 #endif
 
 #if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
 #define HAVE_SOCKADDR_SA_LEN
 #endif
 
-#include <sys/types.h>
 #include <sys/stat.h>
 
 #ifndef _WIN32
@@ -74,10 +66,6 @@ typedef int ssize_t;
 #include <fcntl.h>
 #include <ctype.h>
 #include <limits.h>
-
-#ifndef _WIN32
-#include <unistd.h>
-#endif
 
 #ifdef _WIN32
 #include <winsock2.h>

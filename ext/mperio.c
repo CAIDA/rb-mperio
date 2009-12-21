@@ -36,19 +36,12 @@
 #define O_NONBLOCK _O_NONBLOCK
 #endif
 
-#if defined(__APPLE__)
-#define _BSD_SOCKLEN_T_
-#endif
-
-#include <sys/types.h>
-
 #ifndef _WIN32
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>  /* for TCP_NODELAY */
-#include <unistd.h>
 #endif
 
 #include <errno.h>
@@ -57,10 +50,6 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <assert.h>
-
-#if defined(HAVE_STDINT_H)
-#include <stdint.h>
-#endif
 
 #include "ruby.h"
 #include "compat.h"

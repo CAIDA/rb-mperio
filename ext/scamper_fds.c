@@ -28,12 +28,7 @@
  *
  */
 
-#if defined(_MSC_VER)
-typedef unsigned __int8 uint8_t;
-typedef unsigned __int16 uint16_t;
-typedef unsigned __int32 uint32_t;
-#define __func__ __FUNCTION__
-#endif
+#include "systypes.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -46,14 +41,11 @@ typedef unsigned __int32 uint32_t;
 #include <sys/param.h>
 #endif
 
-#include <sys/types.h>
-
 #ifndef _WIN32
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <unistd.h>
 #endif
 
 #include <stdlib.h>
@@ -61,10 +53,6 @@ typedef unsigned __int32 uint32_t;
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
-
-#if defined(__APPLE__)
-#include <stdint.h>
-#endif
 
 #if defined(DMALLOC)
 #include <dmalloc.h>

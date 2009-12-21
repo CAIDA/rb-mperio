@@ -21,24 +21,13 @@
  *
  */
 
-#if defined(__APPLE__)
-#include <stdint.h>
-#endif
-
-#include <sys/types.h>
-
-#if defined(_MSC_VER)
-typedef unsigned __int8 uint8_t;
-typedef unsigned __int16 uint16_t;
-typedef unsigned __int32 uint32_t;
-#endif
+#include "systypes.h"
 
 #ifndef _WIN32
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <netinet/in.h>
-#include <unistd.h>
 #endif
 
 #include <stdlib.h>
