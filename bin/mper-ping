@@ -66,6 +66,11 @@ opts.on("--mper-port", "=NUM", Integer,
   $options.mper_port = v
 end
 
+opts.on("--tsps-addr", "=ADDR1[,ADDR2-4]", String,
+        "Timestamp Prespecified Addresses") do |v|
+  $options.tsps = v.split(",")
+end
+
 opts.on("--log", "=PATH", "mper command/result message log path") do |v|
   $options.log_path = v
 end
@@ -156,9 +161,11 @@ class ProgressOutput
     icmp_code = (result.reply_icmp_code || "-").to_s
     tcp_flags = (result.reply_tcp_flags || "-").to_s
 
-    sprintf "%s\t%d\t%s\t%d\t%s\t%s\t%s\t0\t%d.%06d",
+    sprintf "%s\t%d\t%s\t%d\t%s\t%s\t%s\t0\t%d.%06d\t%d\t%d\t%d\t%d",
       result.reply_src, result.reply_ttl, qttl, result.reply_ipid,
-      icmp_type, icmp_code, tcp_flags, result.rx_sec, result.rx_usec
+      icmp_type, icmp_code, tcp_flags, result.rx_sec, result.rx_usec,
+      result.reply_tsps1, result.reply_tsps2, 
+      result.reply_tsps3, result.reply_tsps4
   end
 
 end
@@ -213,7 +220,8 @@ class Prober
       printf "probing %s @ %d\n", target, @target_id.id if $options.verbose
       case $options.probing_method
       when :icmp
-        @mperio.ping_icmp @target_id.advance, target, $options.spacing
+        @mperio.ping_icmp @target_id.advance, target, 
+         $options.spacing, $options.tsps
 
       when :tcp
         @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80),

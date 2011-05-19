@@ -117,6 +117,7 @@ static ID iv_delegate, iv_reqnum, iv_responded, iv_probe_src, iv_probe_dest;
 static ID iv_udata, iv_tx_sec, iv_tx_usec, iv_rx_sec, iv_rx_usec;
 static ID iv_probe_ttl, iv_probe_ipid, iv_reply_src, iv_reply_ttl;
 static ID iv_reply_qttl, iv_reply_ipid, iv_reply_icmp, iv_reply_tcp;
+static ID iv_reply_tsps1, iv_reply_tsps2, iv_reply_tsps3, iv_reply_tsps4;
 
 static ID meth_setup_source_state, meth_prepare_sources;
 static ID meth_source_read_data, meth_source_write_data;
@@ -345,6 +346,26 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 
     case KC_REPLY_TCP_OPT:
       rb_ivar_set(result, iv_reply_tcp, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_TSPS1_OPT:
+      rb_ivar_set(result, iv_reply_tsps1, 
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+      break;
+
+    case KC_REPLY_TSPS2_OPT:
+      rb_ivar_set(result, iv_reply_tsps2, 
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+      break;
+
+    case KC_REPLY_TSPS3_OPT:
+      rb_ivar_set(result, iv_reply_tsps3, 
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+      break;
+
+    case KC_REPLY_TSPS4_OPT:
+      rb_ivar_set(result, iv_reply_tsps4, 
+		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
       break;
 
     default:
@@ -725,14 +746,19 @@ static VALUE
 mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  VALUE vreqnum, vdest, vspacing;
+  VALUE vreqnum, vdest, vspacing, vtsps;
   uint32_t reqnum, spacing;
+  int rtspsc = 0;
+  VALUE *rtsps = NULL;
+  char *tspsaddr = NULL;
   const char *dest;
   const char *msg = NULL;
   size_t msg_len = 0;
+  int i;
+  int opt_cnt = 3; /* the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
-  rb_scan_args(argc, argv, "21", &vreqnum, &vdest, &vspacing);
+  rb_scan_args(argc, argv, "22", &vreqnum, &vdest, &vspacing, &vtsps);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
@@ -740,13 +766,55 @@ mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
   spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
   if (spacing > 2147483647) { spacing = 2147483647; }
 
+  if(!NIL_P(vtsps) && rb_type(vtsps) == T_ARRAY)
+    {
+      rtsps = RARRAY_PTR(RARRAY(vtsps));
+      rtspsc = RARRAY_LEN(RARRAY(vtsps));
+    }
+
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
-  if (spacing > 0) SET_UINT_CWORD(data->words, 3, SPACING, spacing);
+  if (spacing > 0) 
+    {
+      SET_UINT_CWORD(data->words, opt_cnt, SPACING, spacing);
+      opt_cnt++;
+    }
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 3 : 2),
+  for(i=0;i<rtspsc;i++)
+    {
+      if(rb_type(rtsps[i]) == T_STRING)
+	{
+	  StringValue(rtsps[i]);
+	  tspsaddr = RSTRING_PTR(rtsps[i]);
+	  switch (i) 
+	    {
+	    case 0:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS1, tspsaddr);
+	      opt_cnt++;
+	      break;
+
+	    case 1:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS2, tspsaddr);
+	      opt_cnt++;
+	      break;
+	      
+	    case 2:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS3, tspsaddr);
+	      opt_cnt++;
+	      break;
+
+	    case 3:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS4, tspsaddr);
+	      opt_cnt++;
+	      break;
+	    }
+	}
+    }
+
+  msg = create_control_message(data->words, CMESSAGE_LEN(opt_cnt-1),
 			       &msg_len);
+
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -757,14 +825,20 @@ static VALUE
 mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  VALUE vreqnum, vdest, vhop, vcksum, vspacing;
+  VALUE vreqnum, vdest, vhop, vcksum, vspacing, vtsps;
   uint32_t reqnum, hop, cksum, spacing;
+  int rtspsc = 0;
+  VALUE *rtsps = NULL;
+  char *tspsaddr = NULL;
   const char *dest;
   const char *msg = NULL;
   size_t msg_len = 0;
+  int i;
+  int opt_cnt = 5; /* the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
-  rb_scan_args(argc, argv, "41", &vreqnum, &vdest, &vhop, &vcksum, &vspacing);
+  rb_scan_args(argc, argv, "42", 
+	       &vreqnum, &vdest, &vhop, &vcksum, &vspacing, &vtsps);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
@@ -779,9 +853,44 @@ mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
   SET_UINT_CWORD(data->words, 3, TTL, hop);
   SET_UINT_CWORD(data->words, 4, CKSUM, cksum);
-  if (spacing > 0) SET_UINT_CWORD(data->words, 5, SPACING, spacing);
+  if (spacing > 0)
+    {
+      SET_UINT_CWORD(data->words, opt_cnt, SPACING, spacing);
+      opt_cnt++;
+    }
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 5 : 4),
+  for(i=0;i<rtspsc;i++)
+    {
+      if(rb_type(rtsps[i]) == T_STRING)
+	{
+	  StringValue(rtsps[i]);
+	  tspsaddr = RSTRING_PTR(rtsps[i]);
+	  switch (i) 
+	    {
+	    case 0:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS1, tspsaddr);
+	      opt_cnt++;
+	      break;
+
+	    case 1:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS2, tspsaddr);
+	      opt_cnt++;
+	      break;
+	      
+	    case 2:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS3, tspsaddr);
+	      opt_cnt++;
+	      break;
+
+	    case 3:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS4, tspsaddr);
+	      opt_cnt++;
+	      break;
+	    }
+	}
+    }
+
+  msg = create_control_message(data->words, CMESSAGE_LEN(opt_cnt-1),
 			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
@@ -1094,6 +1203,10 @@ Init_mperio(void)
   IV_INTERN(reply_src);
   IV_INTERN(reply_ttl);
   IV_INTERN(reply_qttl);
+  IV_INTERN(reply_tsps1);
+  IV_INTERN(reply_tsps2);
+  IV_INTERN(reply_tsps3);
+  IV_INTERN(reply_tsps4);
   IV_INTERN(reply_ipid);
   IV_INTERN(reply_icmp);
   IV_INTERN(reply_tcp);
