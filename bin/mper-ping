@@ -160,32 +160,27 @@ class ProgressOutput
     icmp_type = (result.reply_icmp_type || "-").to_s
     icmp_code = (result.reply_icmp_code || "-").to_s
     tcp_flags = (result.reply_tcp_flags || "-").to_s
+    tsps1 = result.reply_tsps_ip1 ? 
+      sprintf("%s:%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
+      "-"
+    tsps1 = result.reply_tsps_ip1 ? 
+      sprintf("%s:%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
+      "-"
+    tsps2 = result.reply_tsps_ip2 ? 
+      sprintf("%s:%d", result.reply_tsps_ip2, result.reply_tsps_ts2) : 
+      "-"
+    tsps3 = result.reply_tsps_ip3 ? 
+      sprintf("%s:%d", result.reply_tsps_ip3, result.reply_tsps_ts3) : 
+      "-"
+    tsps4 = result.reply_tsps_ip4 ? 
+      sprintf("%s:%d", result.reply_tsps_ip4, result.reply_tsps_ts4) : 
+      "-"
 
-    sprintf "%s\t%d\t%s\t%d\t%s\t%s\t%s\t0\t%d.%06d",
+    ptrn = "%s\t%d\t%s\t%d\t%s\t%s\t%s\t0\t%d.%06d\t%s\t%s\t%s\t%s";
+    sprintf ptrn,
       result.reply_src, result.reply_ttl, qttl, result.reply_ipid,
-      icmp_type, icmp_code, tcp_flags, result.rx_sec, result.rx_usec
-  end
-
-  def self.reply_tsps(result)
-    # if ip1 is empty, then all others must be empty also
-    unless result.reply_tsps_ip1
-      return nil
-    end
-    output = sprintf "TS1\t%s\t%d",
-      result.reply_tsps_ip1, result.reply_tsps_ts1
-    if result.reply_tsps_ip2
-      output = sprintf "%s\nTS2\t%s\t%d",
-        output, result.reply_tsps_ip2, result.reply_tsps_ts2
-    end
-    if result.reply_tsps_ip3
-      output = sprintf "%s\nTS3\t%s\t%d",
-        output, result.reply_tsps_ip3, result.reply_tsps_ts3
-    end
-    if result.reply_tsps_ip4
-      output = sprintf "%s\nTS4\t%s\t%d",
-        output, result.reply_tsps_ip4, result.reply_tsps_ts4
-    end
-    return output
+      icmp_type, icmp_code, tcp_flags, result.rx_sec, result.rx_usec,
+      tsps1, tsps2, tsps3, tsps4
   end
 
 end
@@ -269,11 +264,7 @@ class Prober
       probe_info = ProgressOutput.probe_info target, @technique, result
       if result.responded?
         reply_info = ProgressOutput.reply_info result
-        tsps_info = ProgressOutput.reply_tsps result
         printf "T\t%s\t%s\n", probe_info, reply_info
-        if tsps_info 
-          printf "%s\n", tsps_info 
-        end
       else
         printf "N\t%s\n", probe_info
       end
