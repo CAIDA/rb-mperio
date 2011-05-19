@@ -67,7 +67,7 @@ opts.on("--mper-port", "=NUM", Integer,
 end
 
 opts.on("--tsps-addr", "=ADDR1[,ADDR2-4]", String,
-        "Timestamp Prespecified Addresses") do |v|
+        "timestamp prespecified addresses") do |v|
   $options.tsps = v.split(",")
 end
 
