@@ -117,7 +117,10 @@ static ID iv_delegate, iv_reqnum, iv_responded, iv_probe_src, iv_probe_dest;
 static ID iv_udata, iv_tx_sec, iv_tx_usec, iv_rx_sec, iv_rx_usec;
 static ID iv_probe_ttl, iv_probe_ipid, iv_reply_src, iv_reply_ttl;
 static ID iv_reply_qttl, iv_reply_ipid, iv_reply_icmp, iv_reply_tcp;
-static ID iv_reply_tsps1, iv_reply_tsps2, iv_reply_tsps3, iv_reply_tsps4;
+static ID iv_reply_tsps_ts1, iv_reply_tsps_ip1;
+static ID iv_reply_tsps_ts2, iv_reply_tsps_ip2;
+static ID iv_reply_tsps_ts3, iv_reply_tsps_ip3;
+static ID iv_reply_tsps_ts4, iv_reply_tsps_ip4;
 
 static ID meth_setup_source_state, meth_prepare_sources;
 static ID meth_source_read_data, meth_source_write_data;
@@ -348,24 +351,44 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
       rb_ivar_set(result, iv_reply_tcp, ULONG2NUM(resp_words[i].cw_uint));
       break;
 
-    case KC_REPLY_TSPS1_OPT:
-      rb_ivar_set(result, iv_reply_tsps1, 
+    case KC_REPLY_TSPS_TS1_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ts1, 
 		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
       break;
 
-    case KC_REPLY_TSPS2_OPT:
-      rb_ivar_set(result, iv_reply_tsps2, 
+    case KC_REPLY_TSPS_IP1_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ip1, 
+		  rb_str_new2(resp_words[i].cw_address));
+      break;
+
+    case KC_REPLY_TSPS_TS2_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ts2, 
 		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
       break;
 
-    case KC_REPLY_TSPS3_OPT:
-      rb_ivar_set(result, iv_reply_tsps3, 
+    case KC_REPLY_TSPS_IP2_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ip2, 
+		  rb_str_new2(resp_words[i].cw_address));
+      break;
+
+    case KC_REPLY_TSPS_TS3_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ts3, 
 		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
       break;
 
-    case KC_REPLY_TSPS4_OPT:
-      rb_ivar_set(result, iv_reply_tsps4, 
+    case KC_REPLY_TSPS_IP3_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ip3, 
+		  rb_str_new2(resp_words[i].cw_address));
+      break;
+
+    case KC_REPLY_TSPS_TS4_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ts4, 
 		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+      break;
+
+    case KC_REPLY_TSPS_IP4_OPT:
+      rb_ivar_set(result, iv_reply_tsps_ip4, 
+		  rb_str_new2(resp_words[i].cw_address));
       break;
 
     default:
@@ -790,22 +813,22 @@ mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
 	  switch (i) 
 	    {
 	    case 0:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS1, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP1, tspsaddr);
 	      opt_cnt++;
 	      break;
 
 	    case 1:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS2, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP2, tspsaddr);
 	      opt_cnt++;
 	      break;
 	      
 	    case 2:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS3, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP3, tspsaddr);
 	      opt_cnt++;
 	      break;
 
 	    case 3:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS4, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP4, tspsaddr);
 	      opt_cnt++;
 	      break;
 	    }
@@ -868,22 +891,22 @@ mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
 	  switch (i) 
 	    {
 	    case 0:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS1, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP1, tspsaddr);
 	      opt_cnt++;
 	      break;
 
 	    case 1:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS2, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP2, tspsaddr);
 	      opt_cnt++;
 	      break;
 	      
 	    case 2:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS3, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP3, tspsaddr);
 	      opt_cnt++;
 	      break;
 
 	    case 3:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS4, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP4, tspsaddr);
 	      opt_cnt++;
 	      break;
 	    }
@@ -1203,10 +1226,14 @@ Init_mperio(void)
   IV_INTERN(reply_src);
   IV_INTERN(reply_ttl);
   IV_INTERN(reply_qttl);
-  IV_INTERN(reply_tsps1);
-  IV_INTERN(reply_tsps2);
-  IV_INTERN(reply_tsps3);
-  IV_INTERN(reply_tsps4);
+  IV_INTERN(reply_tsps_ts1);
+  IV_INTERN(reply_tsps_ip1);
+  IV_INTERN(reply_tsps_ts2);
+  IV_INTERN(reply_tsps_ip2);
+  IV_INTERN(reply_tsps_ts3);
+  IV_INTERN(reply_tsps_ip3);
+  IV_INTERN(reply_tsps_ts4);
+  IV_INTERN(reply_tsps_ip4);
   IV_INTERN(reply_ipid);
   IV_INTERN(reply_icmp);
   IV_INTERN(reply_tcp);

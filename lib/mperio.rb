@@ -171,7 +171,10 @@ class MperIO
     attr_reader :probe_src, :probe_dest, :udata
     attr_reader :tx_sec, :tx_usec, :rx_sec, :rx_usec
     attr_reader :probe_ttl, :probe_ipid, :reply_src, :reply_ttl, :reply_qttl
-    attr_reader :reply_tsps1, :reply_tsps2, :reply_tsps3, :reply_tsps4
+    attr_reader :reply_tsps_ts1, :reply_tsps_ip1
+    attr_reader :reply_tsps_ts2, :reply_tsps_ip2
+    attr_reader :reply_tsps_ts3, :reply_tsps_ip3
+    attr_reader :reply_tsps_ts4, :reply_tsps_ip4
     attr_reader :reply_ipid
 
     def responded?
