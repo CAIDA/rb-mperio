@@ -1,0 +1,713 @@
+#!/usr/bin/env ruby
+
+#############################################################################
+## Implements the IP Prespecified Timestamp dealias method described in
+## "Resolving IP Aliases with Prespecified Timestamps", Sherry et al., IMC'10
+##
+## There is one line of output for each pair of candidate addresses (IPa,IPb), 
+## as follows:
+## <candidate_pair>|<suitability_check>|<alias_check>|
+##   <shared_clk>|<distance_loop>|<overall>
+##
+## The structure and possible values in each section are listed below:
+##
+## <candidate_pair>
+##   IPa,IPb
+##   e.g. 192.168.1.1,192.168.1.2
+##
+## <suitability_check>
+##   A=<result>,B=<result>
+##   The suitability check is performed on each address. The check must
+##   pass on IPa before the test is performed on IPb.
+##   
+##   The possible result values are:
+##     POT  => Pass, Over Two (Stamps)
+##     PTS  => Pass, Two Stamps
+##     FNRx => Fail, No Reply (where x is the number of noreplies)
+##     FNS  => Fail, No Stamp
+##     FES  => Fail, Extra Stamp
+##     FOS  => Fail, One Stamp
+##
+## <alias_check>
+##   The alias check is only performed if both IPa and IPb pass the 
+##   suitability check.
+##
+##   Possible values are:
+##     PTS  => Pass, Two Stamps
+##     PFS  => Pass, Four Stamps (indicates an alias)
+##     FNRx => Fail, No Reply (where x is the number of noreplies)
+##     FOS  => Fail, One Stamp
+##     FNS  => Fail, No Stamps
+##     FTS  => Fail, Three Stamps (an error condition)
+##
+## <shared_clk>
+##   The shared clock test is only performed if the alias check test is
+##   passed with the PTS flag, indicating that the replies were stamped
+##   twice.
+##
+##   Possible values are:
+##     PSC  => Pass, Shared Clock
+##     FDT  => Fail, Decreasing Timestamp
+##     F90  => Fail, less than 90% stamp consistency
+##
+## <distance_loop>
+##   The distance/loop test is only preformed if the shared clock test is
+##   passed with the PSC flag.
+##
+##   Possible values are:
+##     PDI  => Pass, Distance
+##     FNRx => Fail, No Reply (where x is the number of noreplies)
+##     FTV  => Fail, TTL Variance (within the probes to a single interface)
+##
+## <overall>
+##   The overall value is the end result of performing the dealias algorithm
+##   on the candidate pair.
+## 
+##   Possible values are:
+##     ALIAS      => Confirmed as aliases.
+##     NOALIAS    => Confirmed to not be aliases.
+##     UNKNOWN    => A determination could not be made (probably due to
+##                   transient routing conditions).
+##     INELIGIBLE => The candidate interfaces were not suitable for this
+##                   technique.
+##     ERROR      => An unexpected result not handled by the algorithm.
+##
+#############################################################################
+
+if $0 =~ /dev$/
+  $: << "#{ENV['HOME']}/caida/rb-mperio/ext"
+  $: << "#{ENV['HOME']}/caida/rb-mperio/lib"
+else
+  require 'rubygems'
+end
+
+require 'ostruct'
+require 'optparse'
+
+require 'mperio'
+
+$options = OpenStruct.new
+$options.spacing = 0
+$options.log_path = nil  # disable logging by default
+
+opts = OptionParser.new
+
+opts.banner="usage: #{$0} [-?fv] [-n concurrency] [-s spacing] [-l logfile]\n"\
+ + " " * $0.to_s.length + "        -p mperport -c candidatefile | IPa IPb"
+
+opts.on("-p", "--mper-port=NUM", Integer,
+	"mper control socket port (REQUIRED)") do |v|
+  $options.mper_port = v
+end
+
+opts.on("-c", "--candidates=PATH",
+        "file with candidate pair information") do |v|
+  $options.candidate_path = v
+end
+
+opts.on("-n", "--concurrency=NUM", Integer,
+        "max targets to probe concurrently (default: unlimited)") do |v|
+  $options.concurrency = v
+end
+
+opts.on("-s", "--spacing=NUM", Integer,
+        "spacing (ms) between probes (default: #{$options.spacing})") do |v|
+  $options.spacing = v
+end
+
+opts.on("-f", "--full", TrueClass, "show full result output") do |v|
+  $options.full = v
+end
+
+opts.on("-v", "--[no-]verbose", TrueClass,  "show detailed progress") do |v|
+  $options.verbose = v
+end
+
+opts.on("-l", "--log=PATH", "mper command/result message log path") do |v|
+  $options.log_path = v
+end
+
+opts.on_tail("-?", "--help", "show this message") do
+  puts opts
+  exit
+end
+
+begin
+  opts.parse!(ARGV)
+rescue OptionParser::ParseError
+  $stderr.puts "ERROR: " + $!.to_s + "\n\n"
+  $stderr.puts opts
+  exit 1
+end
+
+unless $options.mper_port
+  $stderr.puts "ERROR: missing mper port\n\n"
+  $stderr.puts opts
+  exit -1
+end
+
+# change the IPa and IPb options to allow a list of IPa,IPb pairs
+# when we get to the point where we can resolve multiple pairs
+unless $options.candidate_path || ARGV.length == 2
+  $stderr.puts "ERROR: candidate file path "\
+    "or both IPa and IPb must be specified\n\n"
+  $stderr.puts opts
+  exit -1
+end
+
+#============================================================================
+
+class CandidateFile
+
+  attr_reader :destination
+
+  def initialize(candidate_path)
+    @candidate_path = candidate_path
+    @candidate_io = File.open candidate_path
+    @done = false
+  end
+
+  def next_candidate
+    return nil if @done
+    loop do
+      line = @candidate_io.gets
+      if line
+        next if line =~ /^\#/ || line =~ /^\s*$/
+        line.chomp!
+        @candidates = line.split(",")
+        return line
+      else
+        @done = true
+        return nil
+      end
+    end
+  end
+
+end
+
+
+#============================================================================
+##
+## TODO: When we get the ability to process more than one candidate pair,
+##       modify this class to hold the list of pairs and return a new
+##       one each time next_candidates is called
+##
+class ImmediateCandidates
+
+  def initialize(ipa, ipb)
+    @ipa = validate_ip(ipa)
+    @ipb = validate_ip(ipb)
+  end
+
+def validate_ip(ip)
+  if ip =~ /^\d+\.\d+\.\d+\.\d+$/
+    ip
+  else
+    $stderr.puts "ERROR: malformed candidate ip #{ipa}"
+    exit -1
+  end
+end
+
+  def next_candidate
+    if @done
+      nil
+    else
+      @done = true
+      [@ipa, @ipb]
+    end
+  end
+
+end
+
+#============================================================================
+
+class Task
+  attr_accessor :id, :dest, :tsps_ips, :result
+  
+  def initialize(dest, tsps_ips)
+    self.dest = dest
+    self.tsps_ips = tsps_ips
+  end
+
+  def to_s
+    "Task #{id}: (#{dest}|#{tsps_ips.join(',')})"
+  end
+    
+end
+
+#============================================================================
+
+class Prober
+
+  class TargetID
+    attr_reader :id
+
+    def initialize
+      @id = 1  # don't use id == 0
+    end
+
+    def advance
+      @retval = @id
+      @id += 1  # unlikely to ever wrap... famous last words
+      @retval
+    end
+  end
+
+  def initialize(mperio)
+    @queued_tasks = []
+    @pending_tasks = {}
+    @completed_tasks = []
+ 
+    @mperio = mperio
+    @mperio.delegate = self
+
+    @next_task_id = TargetID.new
+
+    @reached_concurrency = false
+  end
+
+  def add_task(task)
+    @queued_tasks << task
+   end
+
+  def probe
+    @task_count = @queued_tasks.length
+    @mperio.start
+    ret_tasks = @completed_tasks
+    @completed_tasks = []
+    ret_tasks
+  end
+
+  def stop
+    @mperio.stop
+  end
+
+  private
+  def _do_task
+    task = @queued_tasks.pop
+    unless task
+      $stderr.puts "DEBUG (_do_task): task list empty"
+      return
+    end
+    task.id = @next_task_id.advance
+    @pending_tasks[task.id] = task
+
+    printf "probing (%s|%s) @ %d\n", 
+      task.dest, task.tsps_ips.join(','), task.id if $options.verbose
+    @mperio.ping_icmp task.id, task.dest, $options.spacing, task.tsps_ips
+  end
+
+
+  def mperio_on_more
+    puts "more" if $options.verbose
+    $stderr.puts "concurrency: #{$options.concurrency} len: #{@pending_tasks.length}"
+    if $options.concurrency && @pending_tasks.length >= $options.concurrency
+      @reached_concurrency = true
+      return  # submit next task in mperio_on_data when a slot becomes free
+    end
+
+    if @queued_tasks.length == 0
+      if @pending_tasks.length == 0
+        $stderr.puts "DEBUG (mperio_on_more): "\
+          "completed_tasks=#{@completed_tasks.length} "\
+          "task_count=#{@task_count}"
+        $stderr.puts "suspending mperio"
+        @mperio.suspend
+      end
+    else
+      _do_task
+    end
+  end
+
+  def mperio_on_data(result)
+    printf "mperio_on_data: %p\n", result if $options.verbose
+
+    task = @pending_tasks.delete result.reqnum
+
+    if task
+      task.result = result
+      @completed_tasks << task
+    else
+      $stderr.puts "pending task not found for id #{result.reqnum}"
+      exit -1
+    end
+
+    if @pending_tasks.length == 0 && @queued_tasks.length == 0
+      @mperio.suspend
+    end
+
+    if @reached_concurrency
+      @reached_concurrency = false
+      mperio_on_more()
+    end
+  end
+
+
+  def mperio_on_error(reqnum, message)
+    $stderr.printf "mperio_on_error: reqnum=%d msg=%s\n", reqnum, message
+    @mperio.stop
+    exit 1
+  end
+
+
+  def mperio_on_send_error(reqnum, message)
+    $stderr.printf "mperio_on_send_error: reqnum=%d msg=%s\n", reqnum, message
+    @pending_tasks.remove reqnum
+    @mperio.suspend if @pending_tasks.length == 0 && @queued_tasks.length == 0
+  end
+
+
+  def mperio_service_failure(message)
+    $stderr.printf "mperio_service_failure: %s\n", message
+    @mperio.stop
+    exit 1
+  end
+
+end
+
+#============================================================================
+
+class TspsDealias
+
+  class DealiasResult
+    
+    attr_reader :ipa, :ipb
+    attr_accessor :suit_check, :alias_check
+    attr_accessor :shared_clk, :distance_loop, :overall
+
+    def initialize(ipa, ipb)
+      @ipa = ipa
+      @ipb = ipb
+      @suit_check = []
+    end
+
+    def to_s
+      result = sprintf("%s,%s|A=%s", @ipa, @ipb, @suit_check[0])
+      result += sprintf(",B=%s", @suit_check[1]) if @suit_check[1]
+      result += sprintf("|%s", @alias_check) if @alias_check
+      result += sprintf("|%s", @shared_clk) if @shared_clk
+      result += sprintf("|%s", @distance_loop) if @distance_loop
+      result += sprintf("|%s", @overall)
+    end
+
+  end
+
+  X = "192.0.2.0"
+  REPEAT = 5
+
+  def initialize(prober, candidates)
+    @prober = prober
+    @candidates = candidates
+  end
+
+  def task_complete
+    $stderr.puts "task complete!!"
+  end
+
+  def start
+    # start dealiasing the 'list' of candidates
+    @ips = @candidates.next_candidate
+    if @ips
+      @ipa = @ips[0]
+      @ipb = @ips[1]
+
+      @dealias_result = DealiasResult.new(@ipa, @ipb)
+
+      # check suitability for dealiasing
+      if check_suitability(@ipa) && check_suitability(@ipb)
+        # the actual dealias tests
+        check_alias @ipa, @ipb
+      else
+        @dealias_result.overall = "INELIGIBLE"
+      end
+
+      $stdout.puts @dealias_result.to_s
+    else
+      @prober.stop
+    end
+  end
+
+  def repeat_add(dest, tsps_ips)
+    REPEAT.times do 
+      @prober.add_task(Task.new(dest, tsps_ips))
+    end
+  end
+
+  def check_suitability(ip)
+    message = "#{ip}: suitability check"
+    err_message = message + " failed "
+    log(message)
+
+    #check for single stamp with (A|AXXX)
+    log("#{ip}: \textra stamp bug check (A|AXXX)")
+    repeat_add(ip, [ip, X, X, X])
+    tasks = @prober.probe
+
+    stamp_types = classify_stamps(tasks)
+    if stamp_types[:two_stamps] > 0
+      log(err_message + "(extra stamp)")
+      @dealias_result.suit_check << "FES"
+      return false
+    elsif stamp_types[:no_stamp] > 0
+      log(err_message + "(no stamp)")
+      @dealias_result.suit_check << "FNS"
+      return false
+    elsif stamp_types[:no_reply] > stamp_types[:one_stamp]
+      log(err_message + 
+           "(#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
+      @dealias_result.suit_check << "FNR#{stamp_types[:no_reply]}"
+      return false
+    end
+
+    # check for two or more stamps with (A|AAAA)
+    log("#{ip}: \tdouble stamp check (A|AAAA)")
+    repeat_add(ip, [ip, ip, ip, ip])
+    tasks = @prober.probe
+    stamp_types = classify_stamps(tasks)
+
+    if stamp_types[:no_stamp] > 0
+      log(err_mesage + "(no stamp)")
+      @dealias_result.suit_check << "FNS"
+      return false
+    elsif stamp_types[:one_stamp] > 0
+      log(err_message + "(one stamp)")
+      @dealias_result.suit_check << "FOS"
+      return false
+    elsif stamp_types[:no_reply] > 
+        (stamp_types[:two_stamps] + stamp_types[:three_stamps] +
+         stamp_types[:four_stamps])
+      log(err_message + 
+           "((#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
+      @dealias_result.suit_check << "FNR#{stamp_types[:no_reply]}"
+      return false
+    elsif (stamp_types[:three_stamps] + stamp_types[:four_stamps]) > 0
+      log(message + " passed (>2 stamps)")
+      @dealias_result.suit_check << "POT"
+      return true
+    elsif stamp_types[:two_stamps] > 0
+      log(message + " passed (2 stamps)")
+      @dealias_result.suit_check << "PTS"
+      return true
+    else
+      # huh? how could we have possibly got here?
+      log(message + "FATAL ERROR: invalid state")
+      @alias_result.overall = "ERROR"
+      return false
+    end
+  end
+
+  def check_alias(ipa, ipb)
+    message = "#{ipa},#{ipb}: dealias check"
+    err_message = message + " failed "
+    log(message)
+
+    log("#{ipa}: \tdealias check (A|ABAB)")
+    repeat_add(ipa, [ipa, ipb, ipa, ipb]);
+
+    log("#{ipb}: \tdealias check (B|BABA)")
+    repeat_add(ipb, [ipb, ipa, ipb, ipa]);
+
+    tasks = @prober.probe
+
+    stamp_types = classify_stamps(tasks)
+    passed_cnt = stamp_types[:two_stamps] + stamp_types[:three_stamps] +
+      stamp_types[:four_stamps]
+    if passed_cnt < REPEAT
+      log(err_message + 
+           "(#{passed_cnt} of #{REPEAT} required probes with >=2 stamps)")
+      if stamp_types[:one_stamp] > 0
+        @dealias_result.alias_check = "FOS"
+        @dealias_result.overall = "NOALIAS"
+      elsif stamp_types[:no_stamp] > 0
+        @dealias_result.alias_check = "FNS"
+        @dealias_result.overall = "ERROR"
+      elsif stamp_types[:no_reply] > 0
+        @dealias_result.alias_check = "FNR#{stamp_types[:no_reply]}"
+        @dealias_result.overall = "UNKNOWN"
+      end
+      return false
+    elsif stamp_types[:four_stamps] > 0
+      log(message + " passed (4 stamps)")
+      @dealias_result.alias_check = "PFS"
+      @dealias_result.overall = "ALIAS"
+      return true
+    elsif stamp_types[:two_stamps] > 0
+      log(message + " passed (2 stamps)")
+      @dealias_result.alias_check = "PTS"
+      if check_shared_clock(tasks, ipa, ipb)
+        return check_distance_loop(tasks)
+      else
+        @dealias_result.overall = "NOALIAS"
+        return false
+      end
+    elsif stamp_types[:three_stamps] > 0
+      log(message + "FATAL ERROR: three stamps received")
+      @dealias_result.alias_check = "FTS"
+      @dealias_result.overall = "ERROR"
+      return false
+    end
+  end
+
+  def check_shared_clock(tasks, ipa, ipb)
+    message = "#{ipa},#{ipb}: shared clock check"
+    err_message = message + " failed "
+    log(message)
+
+    passed_cnt = 0
+    tasks.each do |task|
+      result = task.result
+      max_stamp = nil
+      if result.reply_tsps_ts1
+        max_stamp = result.reply_tsps_ts1
+      end
+      if result.reply_tsps_ts2
+        if max_stamp > result.reply_tsps_ts2
+          log(err_message + "(decrementing timestamp)")
+          @dealias_result.shared_clk = "FDT"
+          return false
+        elsif max_stamp == result.reply_tsps_ts2
+          passed_cnt += 1
+        elsif max_stamp < result.reply_tsps_ts2
+          max_stamp = result.reply_tsps_ts2
+        end
+      end
+      if result.reply_tsps_ts3
+        if max_stamp > result.reply_tsps_ts3
+          log(err_message + "(decrementing timestamp)")
+          @dealias_result.shared_clk = "FDT"
+          return false
+        elsif max_stamp == result.reply_tsps_ts3
+          passed_cnt += 1
+        elsif max_stamp < result.reply_tsps_ts3
+          max_stamp = result.reply_tsps_ts3
+        end
+      end
+      if result.reply_tsps_ts4
+        if max_stamp > result.reply_tsps_ts4
+          log(err_message + "(decrementing timestamp)")
+          @dealias_result.shared_clk = "FDT"
+          return false
+        elsif max_stamp == result.reply_tsps_ts4
+          passed_cnt += 1
+        elsif max_stamp < result.reply_tsps_ts4
+          max_stamp = result.reply_tsps_ts4
+        end
+      end
+      
+      shared_clk_pct = (passed_cnt/tasks.length)*100
+      if shared_clk_pct >= 90
+        log(message + " passed (#{shared_clk_pct}% shared clocks)")
+        @dealias_result.shared_clk = "PSC"
+        return true
+      else
+        log(err_message + "#{shared_clk_pct}% shared clocks (90% required)")
+        @dealias_result.shared_clk = "F90"
+        return false
+      end
+    end
+  end
+
+  def check_distance_loop(ipa, ipb)
+    message = "#{ipa},#{ipb}: distance/loop check"
+    err_message = message + " failed "
+    log(message)
+
+    # check for loops
+    # how?
+
+    log("#{ipa}: \tcheck reverse distance")
+    repeat_add(ipa, nil);
+    tasks = @prober.probe
+    ipa_ttl = get_return_ttl(ipa, tasks)
+
+    log("#{ipb}: \tcheck reverse distance")
+    repeat_add(ipb, nil);
+    tasks = @prober.probe
+    ipb_ttl = get_return_ttl(ipb, tasks)
+
+    unless ipa_ttl && ipb_ttl
+      @dealias_result.overall = "UNKNOWN"
+      return false
+    end
+
+    if ipa_ttl != ipb_ttl
+      log(err_message + "A and B not equidistant")
+      @dealias_result.distance_loop = "FDI"
+      @dealias_result.overall = "UNKNOWN"
+      return false
+    end
+
+    @dealias_result.distance_loop = "PDI"
+    @dealias_result.overall = "ALIAS"
+    return true
+  end
+
+  def get_return_ttl(ip, tasks)
+    message = "#{ip}: establishing return distance"
+    err_message = message + " failed "
+    log(message)
+
+    ttl = nil
+    noreply = 0
+    tasks.each do |task|
+      if task.result.responded?
+        ttl = task.result.reply_ttl if ttl == nil
+        if task.result.reply_ttl != ttl
+          log(err_message + "reply ttl varies")
+          @dealias_result.distance_loop = "FTV"
+          return nil
+        end
+      else
+        noreply += 1
+      end
+    end
+    
+    if noreply == REPEAT
+      log(err_message + "no reply")
+      @dealias_result.distance_loop = "FNR#{noreply}"
+      return nil
+    end
+
+    return ttl
+  end
+
+
+  def classify_stamps(tasks)
+    stamp_types = Hash.new(0)
+    tasks.each do |task|
+      stamp_types[count_stamps(task.result)] += 1
+    end
+    stamp_types
+  end
+
+  def count_stamps(result)
+    return :no_reply if !result.responded?
+    return :four_stamps if result.reply_tsps_ts4
+    return :three_stamps if result.reply_tsps_ts3
+    return :two_stamps if result.reply_tsps_ts2
+    return :one_stamp if result.reply_tsps_ts1
+    return :no_stamp
+  end
+
+  def failed(check)
+    @failures[check] += 1;
+  end
+
+  def log(message)
+    $stderr.puts message if $options.full
+  end
+  
+end
+
+#============================================================================
+
+if $options.target_path
+  candidates = TargetFile.new $options.target_path
+else
+  candidates = ImmediateCandidates.new ARGV[0], ARGV[1]
+end
+
+mperio = MperIO.new $options.mper_port, $options.log_path
+prober = Prober.new mperio
+dealias = TspsDealias.new prober, candidates
+dealias.start
