@@ -300,7 +300,6 @@ class Prober
 
   def mperio_on_more
     puts "more" if $options.verbose
-    $stderr.puts "concurrency: #{$options.concurrency} len: #{@pending_tasks.length}"
     if $options.concurrency && @pending_tasks.length >= $options.concurrency
       @reached_concurrency = true
       return  # submit next task in mperio_on_data when a slot becomes free
@@ -308,10 +307,6 @@ class Prober
 
     if @queued_tasks.length == 0
       if @pending_tasks.length == 0
-        $stderr.puts "DEBUG (mperio_on_more): "\
-          "completed_tasks=#{@completed_tasks.length} "\
-          "task_count=#{@task_count}"
-        $stderr.puts "suspending mperio"
         @mperio.suspend
       end
     else
