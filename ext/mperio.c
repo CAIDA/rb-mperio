@@ -798,6 +798,7 @@ mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
+
   if (spacing > 0) 
     {
       SET_UINT_CWORD(data->words, opt_cnt, SPACING, spacing);
