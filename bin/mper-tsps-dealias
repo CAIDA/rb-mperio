@@ -198,16 +198,16 @@ class ImmediateCandidates
     @ipa = validate_ip(ipa)
     @ipb = validate_ip(ipb)
   end
-
-def validate_ip(ip)
-  if ip =~ /^\d+\.\d+\.\d+\.\d+$/
-    ip
-  else
-    $stderr.puts "ERROR: malformed candidate ip #{ipa}"
-    exit -1
+  
+  def validate_ip(ip)
+    if ip =~ /^\d+\.\d+\.\d+\.\d+$/
+      ip
+    else
+      $stderr.puts "ERROR: malformed candidate ip: \"#{ip}\""
+      exit -1
+    end
   end
-end
-
+  
   def next_candidate
     if @done
       nil
