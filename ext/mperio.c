@@ -353,7 +353,7 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 
     case KC_REPLY_TSPS_TS1_OPT:
       rb_ivar_set(result, iv_reply_tsps_ts1, 
-		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+		  ULONG2NUM(resp_words[i].cw_uint));
       break;
 
     case KC_REPLY_TSPS_IP1_OPT:
@@ -363,7 +363,7 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 
     case KC_REPLY_TSPS_TS2_OPT:
       rb_ivar_set(result, iv_reply_tsps_ts2, 
-		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+		  ULONG2NUM(resp_words[i].cw_uint));
       break;
 
     case KC_REPLY_TSPS_IP2_OPT:
@@ -373,7 +373,7 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 
     case KC_REPLY_TSPS_TS3_OPT:
       rb_ivar_set(result, iv_reply_tsps_ts3, 
-		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+		  ULONG2NUM(resp_words[i].cw_uint));
       break;
 
     case KC_REPLY_TSPS_IP3_OPT:
@@ -383,7 +383,7 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 
     case KC_REPLY_TSPS_TS4_OPT:
       rb_ivar_set(result, iv_reply_tsps_ts4, 
-		  ULONG2NUM(resp_words[i].cw_timeval.tv_sec));
+		  ULONG2NUM(resp_words[i].cw_uint));
       break;
 
     case KC_REPLY_TSPS_IP4_OPT:
