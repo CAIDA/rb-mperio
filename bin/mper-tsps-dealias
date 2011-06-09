@@ -6,51 +6,82 @@
 ##
 ## There is one line of output for each pair of candidate addresses (IPa,IPb), 
 ## as follows:
-## <candidate_pair>|<suitability_check>|<alias_check>|
-##   <shared_clk>|<distance_loop>|<overall>
+## <candidate_pair>|<suitability_check>|<alias_validity_check|<reverse_path>
+##   <alias_check>|<shared_clk>|<distance_loop>|<overall>
 ##
 ## The structure and possible values in each section are listed below:
 ##
-## <candidate_pair>
+## <candidate_pair> MANDATORY
 ##   IPa,IPb
 ##   e.g. 192.168.1.1,192.168.1.2
 ##
-## <suitability_check>
-##   A=<result>,B=<result>
-##   The suitability check is performed on each address. The check must
-##   pass on IPa before the test is performed on IPb.
+## <suitability_check> MANDATORY
+##   <result>,<result>
+##   The suitability check is performed on each address.
 ##   
 ##   The possible result values are:
-##     POT  => Pass, Over Two (Stamps)
-##     PTS  => Pass, Two Stamps
-##     FNRx => Fail, No Reply (where x is the number of noreplies)
-##     FNS  => Fail, No Stamp
-##     FES  => Fail, Extra Stamp
-##     FOS  => Fail, One Stamp
-##
-## <alias_check>
-##   The alias check is only performed if both IPa and IPb pass the 
+##     P4Sx => Pass, 4 Stamps
+##     P3Sx => Pass, 3 Stamps
+##     P2Sx => Pass, 2 Stamps
+##     F1Sx => Fail, One Stamp
+##     FNSx => Fail, No Stamp
+##     FNRx => Fail, No Reply
+##     FESx => Fail, Extra Stamp
+##     FVSx => Fail, Varying Stamps (multiple stamping behaviours were oberved)
+##      (where x is the number of probes that were replied to)
+## 
+## <alias_validity_check> OPTIONAL
+##   <result>,<result>
+##   The alias validity check is only performed if both IPa and IPb pass the 
 ##   suitability check.
 ##
 ##   Possible values are:
-##     PTS  => Pass, Two Stamps
-##     PFS  => Pass, Four Stamps (indicates an alias)
-##     FNRx => Fail, No Reply (where x is the number of noreplies)
-##     FOS  => Fail, One Stamp
-##     FNS  => Fail, No Stamps
-##     FTS  => Fail, Three Stamps (an error condition)
+##     P2S => Pass, Two Stamps
+##     P3S => Pass, Three Stamps (weeded out in alias check)
+##     P4S => Pass, Four Stamps
+##     FNR => Fail, No Reply 
+##     F1S => Fail, One Stamp
+##     FNS => Fail, No Stamps
+##     FVS => Fail, Varying Stamps (multiple stamping behaviours were oberved)
+##     FRP => Fail, Reverse Path (a 4 stamper elicited 2 or 3 stamps) (NOALIAS)
 ##
-## <shared_clk>
+## <reverse_path> OPTIONAL
+##   The reverse path check is only performed if 
+##   (IPa==P2S && IPb==F1S) || (IPa==F1S && IPb==P2S)
+##   Works by probing the P2S interface (A) with (A|BABA) to determine if B
+##   is in fact in the return path from A.
+##
+##   Possible values are:
+##     FNR => Fail, No Reply
+##     FVS => Fail, Varying Stamps
+##     FNS => Not enough data to make a conclusion (UNKNOWN-NOALIAS)
+##     F1S => Should not happen (load balancing?) (ERROR)
+##     F2S => A is in the fwd path, but not reverse? (UNKNOWN-NOALIAS)
+##     F3S => A is in both fwd and reverse path (NOALIAS)
+##     F4S => Should not happen (ERROR)
+##
+## <alias_check> OPTIONAL
+##   The alias check is only performed if both IPa and IPb pass the 
+##   validity check
+##
+##   Possible values are:
+##     P2S => Pass, Two Stamps
+##     P4S => Pass, Four Stamps (indicates an alias)
+##     F3S => Fail, Three Stamps (an error condition)
+##     FIR => Fail, Insufficient Stamps (50% total replies are required)
+##
+## <shared_clk> OPTIONAL
 ##   The shared clock test is only performed if the alias check test is
 ##   passed with the PTS flag, indicating that the replies were stamped
 ##   twice.
 ##
 ##   Possible values are:
 ##     PSC  => Pass, Shared Clock
+##     PME  => Pass, Midnight/Epoch
 ##     FDT  => Fail, Decreasing Timestamp
 ##     F90  => Fail, less than 90% stamp consistency
 ##
-## <distance_loop>
+## <distance_loop> OPTIONAL
 ##   The distance/loop test is only preformed if the shared clock test is
 ##   passed with the PSC flag.
 ##
@@ -59,15 +90,17 @@
 ##     FNRx => Fail, No Reply (where x is the number of noreplies)
 ##     FTV  => Fail, TTL Variance (within the probes to a single interface)
 ##
-## <overall>
+## <overall> MANDATORY
 ##   The overall value is the end result of performing the dealias algorithm
 ##   on the candidate pair.
 ## 
 ##   Possible values are:
-##     ALIAS      => Confirmed as aliases.
-##     NOALIAS    => Confirmed to not be aliases.
-##     UNKNOWN    => A determination could not be made (probably due to
-##                   transient routing conditions).
+##     ALIAS            => Confirmed as aliases.
+##     NOALIAS          => Confirmed to not be aliases.
+##     UNKNOWN          => A determination could not be made.
+##     UNKNOWN-REPROBE  => Could potentially be resolved by reprobing.
+##     UNKNOWN-ALIAS    => Are probably aliases but cannot be confirmed.
+##     UNKNOWN-NOALIAS  => Are probably not aliases but cannot be confirmed
 ##     INELIGIBLE => The candidate interfaces were not suitable for this
 ##                   technique.
 ##     ERROR      => An unexpected result not handled by the algorithm.
@@ -291,9 +324,9 @@ class Prober
     end
     task.id = @next_task_id.advance
     @pending_tasks[task.id] = task
-
+    tsps_ips_s = (task.tsps_ips) ? task.tsps_ips.join(',') : ""
     printf "probing (%s|%s) @ %d\n", 
-      task.dest, task.tsps_ips.join(','), task.id if $options.verbose
+      task.dest, tsps_ips_s, task.id if $options.verbose
     @mperio.ping_icmp task.id, task.dest, $options.spacing, task.tsps_ips
   end
 
@@ -367,22 +400,28 @@ class TspsDealias
   class DealiasResult
     
     attr_reader :ipa, :ipb
-    attr_accessor :suit_check, :alias_check
+    attr_accessor :suit_check, :alias_validity_check, :ret_path, :alias_check
     attr_accessor :shared_clk, :distance_loop, :overall
 
     def initialize(ipa, ipb)
       @ipa = ipa
       @ipb = ipb
       @suit_check = []
+      @alias_validity_check = []
+      @ret_path = "-"
+      @alias_check = "-"
+      @shared_clk = "-"
+      @distance_loop = "-"
     end
 
     def to_s
-      result = sprintf("%s,%s|A=%s", @ipa, @ipb, @suit_check[0])
-      result += sprintf(",B=%s", @suit_check[1]) if @suit_check[1]
-      result += sprintf("|%s", @alias_check) if @alias_check
-      result += sprintf("|%s", @shared_clk) if @shared_clk
-      result += sprintf("|%s", @distance_loop) if @distance_loop
-      result += sprintf("|%s", @overall)
+      @alias_validity_check[0] = "-" unless @alias_validity_check[0]
+      @alias_validity_check[1] = "-" unless @alias_validity_check[1]
+      result = sprintf("%s,%s|%s,%s|%s,%s|%s|%s|%s|%s|%s", 
+                       @ipa, @ipb, @suit_check[0], @suit_check[1],
+                       @alias_validity_check[0], @alias_validity_check[1],
+                       @ret_path, @alias_check, @shared_clk, @distance_loop,
+                       @overall)
     end
 
   end
@@ -409,10 +448,16 @@ class TspsDealias
       @dealias_result = DealiasResult.new(@ipa, @ipb)
 
       # check suitability for dealiasing
-      if check_suitability(@ipa) && check_suitability(@ipb)
+      # Pulling these out like this lets us check both for suitability even 
+      # if @ipa is not suitable.
+      # This is not the most efficient method, but it means we get some nicer
+      # stats on the interfaces
+      a_suitable = check_suitability(@ipa)
+      b_suitable = check_suitability(@ipb)
+      if a_suitable && b_suitable
         # the actual dealias tests
         check_alias @ipa, @ipb
-      else
+      elsif !@dealias_result.overall
         @dealias_result.overall = "INELIGIBLE"
       end
 
@@ -439,18 +484,32 @@ class TspsDealias
     tasks = @prober.probe
 
     stamp_types = classify_stamps(tasks)
-    if stamp_types[:two_stamps] > 0
+
+    # we must have at least two replys
+    if stamp_types[:reply_cnt] < 2
+      # we do not have enough replies to have confidence
+      log(err_message + 
+          "(#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
+      @dealias_result.suit_check << "FNR#{stamp_types[:reply_cnt]}"
+      
+      #lets tell them to reprobe if we receive only one reply
+      if stamp_types[:reply_cnt] == 1
+        @dealias_result.overall = "UNKNOWN-REPROBE"
+      end
+
+      return false
+    elsif stamp_types.keys.length > 3 #(no_reply, reply_cnt, x_stamps)
+      # more than one stamping behavior is seen
+      log(err_message + "(more than one stamping behavior)")
+      @dealias_result.suit_check << "FVS#{stamp_types[:reply_cnt]}"
+      return false
+    elsif stamp_types[:two_stamps] > 0
       log(err_message + "(extra stamp)")
-      @dealias_result.suit_check << "FES"
+      @dealias_result.suit_check << "FES#{stamp_types[:reply_cnt]}"
       return false
     elsif stamp_types[:no_stamp] > 0
       log(err_message + "(no stamp)")
-      @dealias_result.suit_check << "FNS"
-      return false
-    elsif stamp_types[:no_reply] > stamp_types[:one_stamp]
-      log(err_message + 
-           "(#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
-      @dealias_result.suit_check << "FNR#{stamp_types[:no_reply]}"
+      @dealias_result.suit_check << "FNS#{stamp_types[:reply_cnt]}"
       return false
     end
 
@@ -460,33 +519,44 @@ class TspsDealias
     tasks = @prober.probe
     stamp_types = classify_stamps(tasks)
 
-    if stamp_types[:no_stamp] > 0
+    if stamp_types[:reply_cnt] < 2
+      # we do not have enough replies to have confidence
+      log(err_message + 
+          "(#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
+      @dealias_result.suit_check << "FNR#{stamp_types[:reply_cnt]}"
+      # tell them to reprobe because we saw replies to (A|AXXX)
+      @dealias_result.overall = "UNKNOWN-REPROBE"
+      return false
+    elsif stamp_types.keys.length > 3 #(no_reply, reply_cnt, x_stamps)
+      # more than one stamping behavior is seen
+      log(err_message + "(more than one stamping behavior)")
+      @dealias_result.suit_check << "FVS#{stamp_types[:reply_cnt]}"
+      return false
+    elsif stamp_types[:no_stamp] > 0
       log(err_mesage + "(no stamp)")
-      @dealias_result.suit_check << "FNS"
+      @dealias_result.suit_check << "FNS#{stamp_types[:reply_cnt]}"
       return false
     elsif stamp_types[:one_stamp] > 0
       log(err_message + "(one stamp)")
-      @dealias_result.suit_check << "FOS"
+      @dealias_result.suit_check << "F1S#{stamp_types[:reply_cnt]}"
       return false
-    elsif stamp_types[:no_reply] > 
-        (stamp_types[:two_stamps] + stamp_types[:three_stamps] +
-         stamp_types[:four_stamps])
-      log(err_message + 
-           "((#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
-      @dealias_result.suit_check << "FNR#{stamp_types[:no_reply]}"
-      return false
-    elsif (stamp_types[:three_stamps] + stamp_types[:four_stamps]) > 0
-      log(message + " passed (>2 stamps)")
-      @dealias_result.suit_check << "POT"
+    elsif stamp_types[:four_stamps] > 0
+      log(message + " passed (4 stamps)")
+      @dealias_result.suit_check << "P4S#{stamp_types[:reply_cnt]}"
+      return true
+    elsif stamp_types[:three_stamps] > 0
+      log(message + " passed (3 stamps)")
+      @dealias_result.suit_check << "P3S#{stamp_types[:reply_cnt]}"
       return true
     elsif stamp_types[:two_stamps] > 0
       log(message + " passed (2 stamps)")
-      @dealias_result.suit_check << "PTS"
+      @dealias_result.suit_check << "P2S#{stamp_types[:reply_cnt]}"
       return true
     else
       # huh? how could we have possibly got here?
       log(message + "FATAL ERROR: invalid state")
-      @alias_result.overall = "ERROR"
+      @dealias_result.suit_check << "XXX"
+      @dealias_result.overall = "ERROR"
       return false
     end
   end
@@ -498,47 +568,104 @@ class TspsDealias
 
     log("#{ipa}: \tdealias check (A|ABAB)")
     repeat_add(ipa, [ipa, ipb, ipa, ipb]);
+    tasks_a = @prober.probe
+    stamp_types_a = classify_stamps(tasks_a)
 
     log("#{ipb}: \tdealias check (B|BABA)")
     repeat_add(ipb, [ipb, ipa, ipb, ipa]);
+    tasks_b = @prober.probe
+    stamp_types_b = classify_stamps(tasks_b)
 
-    tasks = @prober.probe
+    a_valid = check_validity(stamp_types_a, ipa, @dealias_result.suit_check[0])
+    b_valid = check_validity(stamp_types_b, ipb, @dealias_result.suit_check[1])
 
-    stamp_types = classify_stamps(tasks)
+    if !a_valid || !b_valid
+      if @dealias_result.alias_validity_check[0] == "F1S" &&
+          @dealias_result.alias_validity_check[1] == "P2S"
+        return ret_path_check(ipa, ipb)
+      elsif @dealias_result.alias_validity_check[0] == "P2S" &&
+          @dealias_result.alias_validity_check[1] == "F1S"
+        return ret_path_check(ipb, ipa)
+      else
+        return false
+      end
+    end
+
+    # we can merge these at this stage because we are sure that both a and b 
+    # have ONLY one type of stamp and have at least two stamps
+    stamp_types = classify_stamps(tasks_a | tasks_b)
+
     passed_cnt = stamp_types[:two_stamps] + stamp_types[:three_stamps] +
       stamp_types[:four_stamps]
+
+    # be sure that we have a total of REPEAT stamps (50%) to base the analysis on
     if passed_cnt < REPEAT
       log(err_message + 
-           "(#{passed_cnt} of #{REPEAT} required probes with >=2 stamps)")
-      if stamp_types[:one_stamp] > 0
-        @dealias_result.alias_check = "FOS"
-        @dealias_result.overall = "NOALIAS"
-      elsif stamp_types[:no_stamp] > 0
-        @dealias_result.alias_check = "FNS"
-        @dealias_result.overall = "ERROR"
-      elsif stamp_types[:no_reply] > 0
-        @dealias_result.alias_check = "FNR#{stamp_types[:no_reply]}"
-        @dealias_result.overall = "UNKNOWN"
-      end
+          "(#{passed_cnt} of #{REPEAT}" +
+          " required probes with >=2 stamps)")
+      @dealias_result.alias_check = "FIR"
+      @dealias_result.overall = "UNKNOWN-REPROBE"
       return false
-    elsif stamp_types[:four_stamps] > 0
+    end
+
+    # these need to be split because we have to be sure that BOTH a and b
+    # have replied with four stamps
+    if stamp_types_a[:four_stamps] > 0 && stamp_types_b[:four_stamps] > 0
       log(message + " passed (4 stamps)")
-      @dealias_result.alias_check = "PFS"
+      @dealias_result.alias_check = "P4S"
       @dealias_result.overall = "ALIAS"
       return true
-    elsif stamp_types[:two_stamps] > 0
+    elsif (stamp_types_a[:two_stamps] > 0 && stamp_types_b[:four_stamps] > 0)||
+        (stamp_types_a[:four_stamps]&& stamp_types_b[:two_stamps] > 0)
       log(message + " passed (2 stamps)")
-      @dealias_result.alias_check = "PTS"
-      if check_shared_clock(tasks, ipa, ipb)
-        return check_distance_loop(tasks)
+      @dealias_result.alias_check = "P2S"
+      if check_shared_clock((tasks_a | tasks_b), ipa, ipb)
+        return check_distance_loop((tasks_a | tasks_b), ipa, ipb)
       else
-        @dealias_result.overall = "NOALIAS"
         return false
       end
     elsif stamp_types[:three_stamps] > 0
-      log(message + "FATAL ERROR: three stamps received")
-      @dealias_result.alias_check = "FTS"
+      log(err_message + "(three stamps received)")
+      @dealias_result.alias_check = "F3S"
       @dealias_result.overall = "ERROR"
+      return false
+    end
+  end
+
+  def classify_time_type(timestamp)
+    if timestamp > 0 && timestamp < 86400000
+      return :midnight_offset
+    elsif timestamp < 0 || timestamp > 4294967296
+      return :nonstandard
+    elsif timestamp == 0
+      return :zero
+    else
+      return :epoch
+    end
+  end
+
+  def is_midnight_offset(tasks, stamp_types)
+    mid_epoch_cnt = 0
+    tasks.each do |task|
+      stamp_one_type = nil
+      stamp_two_type = nil
+      result = task.result
+      if result.reply_tsps_ts1
+        stamp_one_type = classify_time_type(result.reply_tsps_ts1)
+      end
+
+      if result.reply_tsps_ts2
+        stamp_two_type = classify_time_type(result.reply_tsps_ts2)
+      end
+
+      if stamp_one_type == :midnight_offset && stamp_two_type == :epoch
+        mid_epoch_cnt += 1
+      end
+    end
+
+    if mid_epoch_cnt == stamp_types[:two_stamps]
+      return true
+    else
       return false
     end
   end
@@ -549,60 +676,98 @@ class TspsDealias
     log(message)
 
     passed_cnt = 0
+    dec_ts = 0
+    mid_epoch_cnt = 0
+
+    stamp_types = classify_stamps(tasks)
+
     tasks.each do |task|
       result = task.result
+      stamp_one_type = nil
+      stamp_two_type = nil
       max_stamp = nil
+      task_pass = true
       if result.reply_tsps_ts1
         max_stamp = result.reply_tsps_ts1
+        stamp_one_type = classify_time_type(result.reply_tsps_ts1)
       end
       if result.reply_tsps_ts2
+        stamp_two_type = classify_time_type(result.reply_tsps_ts2)
         if max_stamp > result.reply_tsps_ts2
-          log(err_message + "(decrementing timestamp)")
-          @dealias_result.shared_clk = "FDT"
-          return false
-        elsif max_stamp == result.reply_tsps_ts2
-          passed_cnt += 1
+          dec_ts += 1
         elsif max_stamp < result.reply_tsps_ts2
           max_stamp = result.reply_tsps_ts2
+          task_pass = false
         end
       end
       if result.reply_tsps_ts3
         if max_stamp > result.reply_tsps_ts3
-          log(err_message + "(decrementing timestamp)")
-          @dealias_result.shared_clk = "FDT"
-          return false
-        elsif max_stamp == result.reply_tsps_ts3
-          passed_cnt += 1
+          dec_ts += 1
         elsif max_stamp < result.reply_tsps_ts3
           max_stamp = result.reply_tsps_ts3
+          task_pass = false
         end
       end
       if result.reply_tsps_ts4
         if max_stamp > result.reply_tsps_ts4
-          log(err_message + "(decrementing timestamp)")
-          @dealias_result.shared_clk = "FDT"
-          return false
-        elsif max_stamp == result.reply_tsps_ts4
-          passed_cnt += 1
+          dec_ts += 1
         elsif max_stamp < result.reply_tsps_ts4
           max_stamp = result.reply_tsps_ts4
+          task_pass = false
         end
       end
-      
-      shared_clk_pct = (passed_cnt/tasks.length)*100
-      if shared_clk_pct >= 90
-        log(message + " passed (#{shared_clk_pct}% shared clocks)")
-        @dealias_result.shared_clk = "PSC"
+
+      mid_epoch_cnt += 1 if (stamp_one_type == :midnight_offset && 
+        stamp_two_type == :epoch)
+
+      passed_cnt += 1 if task_pass 
+    end
+
+    # check for decrementing timestamps
+    if dec_ts > 0
+      log(err_message + "(decrementing timestamp)")
+      @dealias_result.shared_clk = "FDT#{dec_ts}"
+      @dealias_result.overall = dec_ts == 0 ? "UNKNOWN-REPROBE" : "NOALIAS"
+      return false
+    end
+          
+    if mid_epoch_cnt == stamp_types[:two_stamps]
+      log("#{ipa}: \tmidnight/epoch behavior check (A|BBBB)")
+      repeat_add(ipa, [ipb, ipb, ipb, ipb])
+      tasks = @prober.probe
+      stamp_types = classify_stamps(tasks)
+      ipa_offset = stamp_types[:two_stamps] > 0 && 
+        is_midnight_offset(tasks, stamp_types)
+        
+      log("#{ipb}: \tmidnight/epoch behavior check (B|AAAA)")
+      repeat_add(ipb, [ipa, ipa, ipa, ipa])
+      tasks = @prober.probe
+      stamp_types = classify_stamps(tasks)
+      ipb_offset = stamp_types[:two_stamps] > 0 && 
+        is_midnight_offset(tasks, stamp_types)
+
+      if ipa_offset && ipb_offset
+        log(message + "(midnight/epoch behavior)")
+        @dealias_result.shared_clk = "PME"
+        @dealias_result.overall = "ALIAS"
         return true
-      else
-        log(err_message + "#{shared_clk_pct}% shared clocks (90% required)")
-        @dealias_result.shared_clk = "F90"
-        return false
       end
+    end
+
+    shared_clk_pct = (passed_cnt/tasks.length.to_f)*100
+    if shared_clk_pct >= 90
+      log(message + " passed (#{shared_clk_pct}% shared clocks)")
+      @dealias_result.shared_clk = "PSC"
+      return true
+    else
+      log(err_message + "#{shared_clk_pct}% shared clocks (90% required)")
+      @dealias_result.shared_clk = "F90"
+      @dealias_result.overall = "UNKNOWN-NOALIAS"
+      return false
     end
   end
 
-  def check_distance_loop(ipa, ipb)
+  def check_distance_loop(tasks, ipa, ipb)
     message = "#{ipa},#{ipb}: distance/loop check"
     err_message = message + " failed "
     log(message)
@@ -610,35 +775,36 @@ class TspsDealias
     # check for loops
     # how?
 
-    log("#{ipa}: \tcheck reverse distance")
+    #log("#{ipa}: \tcheck reverse distance")
     repeat_add(ipa, nil);
     tasks = @prober.probe
     ipa_ttl = get_return_ttl(ipa, tasks)
 
-    log("#{ipb}: \tcheck reverse distance")
+    #log("#{ipb}: \tcheck reverse distance")
     repeat_add(ipb, nil);
     tasks = @prober.probe
     ipb_ttl = get_return_ttl(ipb, tasks)
 
     unless ipa_ttl && ipb_ttl
-      @dealias_result.overall = "UNKNOWN"
+      @dealias_result.overall = "UNKNOWN-REPROBE"
       return false
     end
 
     if ipa_ttl != ipb_ttl
-      log(err_message + "A and B not equidistant")
+      log(err_message + "A(#{ipa_ttl}) and B(#{ipb_ttl}) not equidistant")
       @dealias_result.distance_loop = "FDI"
-      @dealias_result.overall = "UNKNOWN"
+      @dealias_result.overall = "UNKNOWN-NOALIAS"
       return false
     end
 
+    log(message + " passed (A(#{ipa_ttl}) == B=(#{ipb_ttl}))")
     @dealias_result.distance_loop = "PDI"
     @dealias_result.overall = "ALIAS"
     return true
   end
 
   def get_return_ttl(ip, tasks)
-    message = "#{ip}: establishing return distance"
+    message = "#{ip}: \testablishing return distance"
     err_message = message + " failed "
     log(message)
 
@@ -666,11 +832,12 @@ class TspsDealias
     return ttl
   end
 
-
   def classify_stamps(tasks)
     stamp_types = Hash.new(0)
+    stamp_types[:no_reply] = 0 #ensure that there is always a key for this
     tasks.each do |task|
       stamp_types[count_stamps(task.result)] += 1
+      stamp_types[:reply_cnt] += 1 if task.result.responded?
     end
     stamp_types
   end
@@ -682,6 +849,131 @@ class TspsDealias
     return :two_stamps if result.reply_tsps_ts2
     return :one_stamp if result.reply_tsps_ts1
     return :no_stamp
+  end
+
+  def check_validity(stamp_types, ip, suitresult)
+    message = "#{ip}: \tvalidity check"
+    err_message = message + " failed "
+    log(message)
+
+    if stamp_types[:reply_cnt] == 0
+      log(err_message + "(no replies)")
+      @dealias_result.alias_validity_check << "FNR"
+      @dealias_result.overall = "UNKNOWN-REPROBE" unless @dealias_result.overall
+      return false
+    end
+
+    if stamp_types.keys.length > 3
+      log(err_message + "(multiple stamping behvaiors seen)")
+      @dealias_result.alias_validity_check << "FVS"
+      @dealias_result.overall = "INELIGIBLE" unless @dealias_result.overall
+      return false
+    end
+
+    if suitresult =~ /P4S/ && (stamp_types[:two_stamps] > 0 ||
+                               stamp_types[:three_stamps] > 0)
+      log(err_message + "(was 4 stamps indicating reverse path)")
+      @dealias_result.alias_validity_check << "FRP"
+      @dealias_result.overall = "NOALIAS"
+      return false
+    end
+    
+    if stamp_types[:no_stamp] > 0
+      log(err_message + "(no stamps)")
+      @dealias_result.alias_validity_check << "FNS"
+      @dealias_result.overall = "ERROR"
+      return false
+    end
+
+    if stamp_types[:one_stamp] > 0 
+      log(err_message + "(one stamp)")
+      @dealias_result.alias_validity_check << "F1S"
+      @dealias_result.overall = "UNKNOWN" unless @dealias_result.overall
+      return false
+    end
+
+    if stamp_types[:two_stamps] > 0
+      log(message + " passed (two stamps)")
+      @dealias_result.alias_validity_check << "P2S"
+      return true
+    end
+
+    if stamp_types[:three_stamps] > 0
+      #leave this as a pass for the moment
+      #it'll soon get weeded out
+      log(message + " passed (three stamps)")
+      @dealias_result.alias_validity_check << "P3S"
+      return false
+    end
+
+    if stamp_types[:four_stamps] > 0
+      log(message + " passed (four stamps)")
+      @dealias_result.alias_validity_check << "P4S"
+      return true
+    end
+
+    @dealias_result.alias_validity_check << "XXX"
+    @dealias_result.overall = "ERROR"
+  end
+
+  #ip2 is the two stamper, ip1 is the one stamper
+  def ret_path_check(ip1, ip2)
+    message = "#{ip1},#{ip2}: return path check"
+    err_message = message + " completed "
+    log(message)
+
+    log("#{ip1},#{ip2}: \tchecking for #{ip1} in the path to #{ip2} (A|BABA)")
+    repeat_add(ip2, [ip1, ip2, ip1, ip2])
+    tasks = @prober.probe
+
+    stamp_types = classify_stamps(tasks)
+
+    if stamp_types[:reply_cnt] == 0
+      log(err_message + "(no reply)")
+      @dealias_result.ret_path = "FNR"
+      @dealias_result.overall = "UNKNOWN-REPROBE"
+    end
+    
+    if stamp_types.keys.length > 3
+      log(err_message + "(multiple stamping behvaiors seen)")
+      @dealias_result.ret_path = "FVS"
+      @dealias_result.overall = "INELIGIBLE"
+    end
+    
+    if stamp_types[:no_stamp] > 0
+      log(err_message + "(no stamps)")
+      @dealias_result.ret_path = "FNS"
+      @dealias_result.overall = "UNKNOWN-NOALIAS"
+    end
+
+    if stamp_types[:one_stamp] > 0 
+      log(err_message + "(one stamp)")
+      @dealias_result.ret_path "F1S"
+      @dealias_result.overall = "ERROR"
+    end
+
+    if stamp_types[:two_stamps] > 0
+      log(err_message + "(two stamps)")
+      @dealias_result.ret_path = "F2S"
+      @dealias_result.overall = "UNKNOWN-NOALIAS"
+    end
+
+    if stamp_types[:three_stamps] > 0
+      log(err_message + "(three stamps)")
+      @dealias_result.ret_path = "F3S"
+      @dealias_result.overall = "NOALIAS"
+    end
+
+    if stamp_types[:four_stamps] > 0
+      log(err_message + "(four stamps)")
+      @dealias_result.ret_path = "F4S"
+      @dealias_result.overall = "ERROR"
+    end
+    
+    # once we get into this method, we've failed
+    # we're just trying to figure out why
+    return false
+
   end
 
   def failed(check)
@@ -702,7 +994,12 @@ else
   candidates = ImmediateCandidates.new ARGV[0], ARGV[1]
 end
 
-mperio = MperIO.new $options.mper_port, $options.log_path
-prober = Prober.new mperio
-dealias = TspsDealias.new prober, candidates
-dealias.start
+begin
+  mperio = MperIO.new $options.mper_port, $options.log_path
+  prober = Prober.new mperio
+  dealias = TspsDealias.new prober, candidates
+  dealias.start
+rescue
+  $stderr.puts "Failed to connect to mper on port " +
+    "#{$options.mper_port}. Is mper running?"
+end
