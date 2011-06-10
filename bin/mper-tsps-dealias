@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 
-#############################################################################
+#################################################################################
 ## Implements the IP Prespecified Timestamp dealias method described in
 ## "Resolving IP Aliases with Prespecified Timestamps", Sherry et al., IMC'10
 ##
@@ -139,7 +139,7 @@ opts.on("-c", "--candidates=PATH",
 end
 
 opts.on("-n", "--concurrency=NUM", Integer,
-        "max targets to probe concurrently (default: unlimited)") do |v|
+        "max pairs to dealias concurrently (default: unlimited)") do |v|
   $options.concurrency = v
 end
 
@@ -192,7 +192,7 @@ end
 
 class CandidateFile
 
-  attr_reader :destination
+  attr_reader :candidates
 
   def initialize(candidate_path)
     @candidate_path = candidate_path
@@ -207,8 +207,12 @@ class CandidateFile
       if line
         next if line =~ /^\#/ || line =~ /^\s*$/
         line.chomp!
-        @candidates = line.split(",")
-        return line
+        if line =~ /,/
+          @candidates = line.split(",")
+        else
+          @candidates = line.split(" ")
+        end
+        return @candidates
       else
         @done = true
         return nil
@@ -333,7 +337,9 @@ class Prober
 
   def mperio_on_more
     puts "more" if $options.verbose
-    if $options.concurrency && @pending_tasks.length >= $options.concurrency
+    # if the user wants their probes spaced, we can only send one at a time
+    if $options.spacing && @pending_tasks.length >= 1
+    #if $options.concurrency && @pending_tasks.length >= $options.concurrency
       @reached_concurrency = true
       return  # submit next task in mperio_on_data when a slot becomes free
     end
@@ -394,8 +400,34 @@ class Prober
 end
 
 #============================================================================
+class TspsDealiasManager
+  
+  def initialize
+    if $options.candidate_path
+      @candidates = CandidateFile.new $options.candidate_path
+    else
+      @candidates = ImmediateCandidates.new ARGV[0], ARGV[1]
+    end
 
-class TspsDealias
+    begin
+      @mperio = MperIO.new $options.mper_port, $options.log_path
+      @prober = Prober.new mperio
+    rescue
+      $stderr.puts "Failed to connect to mper on port " +
+        "#{$options.mper_port}. Is mper running?"
+    end
+
+  end
+
+  def start
+    
+    dealias = TspsDealias.new prober, candidates
+    dealias.start
+  end
+
+end
+
+class TspsDealias < Thread
 
   class DealiasResult
     
@@ -434,14 +466,10 @@ class TspsDealias
     @candidates = candidates
   end
 
-  def task_complete
-    $stderr.puts "task complete!!"
-  end
-
   def start
     # start dealiasing the 'list' of candidates
-    @ips = @candidates.next_candidate
-    if @ips
+    # @ips = @candidates.next_candidate
+    while (@ips = @candidates.next_candidate) != nil
       @ipa = @ips[0]
       @ipb = @ips[1]
 
@@ -462,9 +490,8 @@ class TspsDealias
       end
 
       $stdout.puts @dealias_result.to_s
-    else
-      @prober.stop
     end
+    @prober.stop
   end
 
   def repeat_add(dest, tsps_ips)
@@ -988,18 +1015,5 @@ end
 
 #============================================================================
 
-if $options.target_path
-  candidates = TargetFile.new $options.target_path
-else
-  candidates = ImmediateCandidates.new ARGV[0], ARGV[1]
-end
-
-begin
-  mperio = MperIO.new $options.mper_port, $options.log_path
-  prober = Prober.new mperio
-  dealias = TspsDealias.new prober, candidates
-  dealias.start
-rescue
-  $stderr.puts "Failed to connect to mper on port " +
-    "#{$options.mper_port}. Is mper running?"
-end
+dealiasManager = TspsDealiasManager.new
+dealiasManager.start
