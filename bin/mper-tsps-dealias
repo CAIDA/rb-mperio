@@ -184,7 +184,7 @@ unless $options.mper_port
   exit -1
 end
 
-unless $options.candidate_path || ARGV.length == 2
+unless $options.candidate_path || ARGV.length >= 1
   $stderr.puts "ERROR: candidate file path "\
     "or both IPa and IPb must be specified\n\n"
   $stderr.puts opts
@@ -234,9 +234,10 @@ end
 
 class ImmediateCandidates
 
-  def initialize(ipa, ipb)
-    @ipa = validate_ip(ipa)
-    @ipb = validate_ip(ipb)
+  def initialize(candidates)
+    @candidates = candidates
+    # @ipa = validate_ip(ipa)
+    # @ipb = validate_ip(ipb)
     advance
   end
   
@@ -245,7 +246,7 @@ class ImmediateCandidates
       ip
     else
       $stderr.puts "ERROR: malformed candidate ip: \"#{ip}\""
-      exit -1
+      advance
     end
   end
   
@@ -254,15 +255,16 @@ class ImmediateCandidates
   end
   
   def advance
-    if @done
+    candidate = @candidates.shift
+    if !candidate
       @current_candidate = nil
+    elsif candidate =~ /,/
+      @current_candidate = candidate.split(/,/)
     else
-      @current_candidate = [@ipa, @ipb]
-      @done = true
+      @current_candidate = [candidate, @candidates.shift]
     end
     @current_candidate
   end
-
 end
 
 
@@ -298,7 +300,7 @@ class TspsDealiasManager
     if $options.candidate_path
       @candidates = CandidateFile.new $options.candidate_path
     else
-      @candidates = ImmediateCandidates.new ARGV[0], ARGV[1]
+      @candidates = ImmediateCandidates.new ARGV
     end
     
     # initialize the mper connection
