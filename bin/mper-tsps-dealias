@@ -181,8 +181,6 @@ unless $options.mper_port
   exit -1
 end
 
-# change the IPa and IPb options to allow a list of IPa,IPb pairs
-# when we get to the point where we can resolve multiple pairs
 unless $options.candidate_path || ARGV.length == 2
   $stderr.puts "ERROR: candidate file path "\
     "or both IPa and IPb must be specified\n\n"
