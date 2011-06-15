@@ -119,6 +119,9 @@ require 'optparse'
 
 require 'mperio'
 
+#never buffer stdout
+$stdout.sync = true
+
 $options = OpenStruct.new
 $options.spacing = 0
 $options.log_path = nil  # disable logging by default
@@ -337,9 +340,9 @@ class TspsDealiasManager
     probe.id = get_next_probe_id()
     probe.task = task
     tsps_ips_s = (probe.tsps_ips) ? probe.tsps_ips.join(',') : ""
-    if $options.verbose
-      printf "probing (%s|%s) @ %d\n", probe.dest, tsps_ips_s, probe.id 
-    end
+    # if $options.verbose
+    #  printf "probing (%s|%s) @ %d\n", probe.dest, tsps_ips_s, probe.id 
+    # end
     @pending_probes[probe.id] = probe
     @mperio.ping_icmp probe.id, probe.dest, $options.spacing, probe.tsps_ips
   end
@@ -364,7 +367,7 @@ class TspsDealiasManager
   end
   
   def mperio_on_more
-    puts "more" if $options.verbose
+    # puts "more" if $options.verbose
     @more = false
     
     # fill the task list
@@ -410,7 +413,7 @@ class TspsDealiasManager
   end
   
   def mperio_on_data(result)
-    printf "mperio_on_data: %p\n", result if $options.verbose
+    #printf "mperio_on_data: %p\n", result if $options.verbose
 
     probe = match_result(result)
 
@@ -458,6 +461,7 @@ class DealiasResult
   attr_reader :ipa, :ipb
   attr_accessor :suit_check, :alias_validity_check, :ret_path, :alias_check
   attr_accessor :shared_clk, :distance_loop, :overall
+  attr_accessor :verbose
   
   def initialize(ipa, ipb)
     @ipa = ipa
@@ -468,9 +472,11 @@ class DealiasResult
     @alias_check = "-"
     @shared_clk = "-"
     @distance_loop = "-"
+    @verbose = []
   end
   
   def to_s
+    dump_verbose() if $options.verbose
     @alias_validity_check[0] = "-" unless @alias_validity_check[0]
     @alias_validity_check[1] = "-" unless @alias_validity_check[1]
     result = sprintf("%s,%s|%s,%s|%s,%s|%s|%s|%s|%s|%s", 
@@ -479,6 +485,13 @@ class DealiasResult
                      @ret_path, @alias_check, @shared_clk, @distance_loop,
                      @overall)
   end  
+
+  def dump_verbose
+    @verbose.each do |line|
+      puts line
+    end
+  end
+
 end
 
 class TspsDealiasTask
@@ -646,6 +659,12 @@ class TspsDealiasSuitabilityIpTask
   def process_reply_probes(replies)
     stamp_types = classify_stamps(@replies)
     if @state == :extra_stamp
+      if @ip == @dealias_result.ipa
+        dump_replies(@dealias_result, "A|AXXX", replies)
+      else
+        dump_replies(@dealias_result, "B|BXXX", replies)
+      end
+
       # we must have at least two replys
       if stamp_types[:reply_cnt] < 2
         # we do not have enough replies to have confidence
@@ -680,6 +699,12 @@ class TspsDealiasSuitabilityIpTask
         @state = :double_stamp
       end
     elsif @state == :double_stamp
+      if @ip == @dealias_result.ipa
+        dump_replies(@dealias_result, "A|AAAA", replies)
+      else
+        dump_replies(@dealias_result, "B|BBBB", replies)
+      end
+
       if stamp_types[:reply_cnt] < 2
         # we do not have enough replies to have confidence
         log(@err_message + 
@@ -832,9 +857,9 @@ class TspsDealiasAliasCheckTask
         process_reply_probes(@replies)
         @replies = []
         if @state == :check_validity
-          a_valid = check_validity(@stamps_a, @ipa, 
+          a_valid = check_validity(@probes_a, @stamps_a, @ipa, 
                                    @dealias_result.suit_check[0])
-          b_valid = check_validity(@stamps_b, @ipb, 
+          b_valid = check_validity(@probes_b, @stamps_b, @ipb, 
                                    @dealias_result.suit_check[1])
 
           if !a_valid || !b_valid
@@ -910,17 +935,19 @@ class TspsDealiasAliasCheckTask
   def process_reply_probes(replies)
     stamp_types = classify_stamps(@replies)
     if @state == :probe_ipa
+      dump_replies(@dealias_result, "A|ABAB", replies)
       @probes_a = @replies
       @stamps_a = stamp_types
       @state = :probe_ipb
     else
+      dump_replies(@dealias_result, "B|BABA", replies)
       @probes_b = @replies
       @stamps_b = stamp_types
       @state = :check_validity
     end
   end
 
-  def check_validity(stamp_types, ip, suitresult)
+  def check_validity(probes, stamp_types, ip, suitresult)
     message = "#{ip}: \tvalidity check"
     err_message = message + " failed "
     log(message)
@@ -939,13 +966,50 @@ class TspsDealiasAliasCheckTask
       return false
     end
 
-    if ((suitresult =~ /P4S/ && (stamp_types[:two_stamps] > 0 ||
-                               stamp_types[:three_stamps] > 0)) ||
-        (suitresult =~ /P2S/ && (stamp_types[:three_stamps] >0)))
-      log(err_message + "(was 4 stamps indicating reverse path)")
-      @dealias_result.alias_validity_check << "FRP"
-      @dealias_result.overall = "NOALIAS"
-      return false
+    if suitresult =~ /P4S/ || suitresult =~ /P2S/
+      if suitresult =~ /P4S/ && stamp_types[:two_stamps] > 0
+        dec_cnt = 0
+        probes.each do |probe|
+          result = probe.result
+          if (result.reply_tsps_ts1 - result.reply_tsps_ts2 > 0) ||
+              (result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
+            dec_cnt += 1
+          end
+        end
+        # went from a 4stamp to a 2stamp
+        # if ts1-ts2 > 0 || ts2-ts1 > 1 more than once
+        if dec_cnt > 1
+          log(err_message + "(4->2 stamps indicating reverse path STRONG)")
+          @dealias_result.alias_validity_check << "FRS"
+        else
+          log(err_message + "(4->2 stamps indicating reverse path WEAK)")
+          @dealias_result.alias_validity_check << "FRW"
+        end
+        @dealias_result.overall = "NOALIAS"
+        return false
+      elsif (suitresult =~ /P4S/ && stamp_types[:three_stamps] > 0) ||
+          (suitresult =~ /P2S/ && stamp_types[:three_stamps] > 0)
+        dec_cnt = 0
+        probes.each do |probe|
+          result = probe.result
+          if (result.reply_tsps_ts1 - result.reply_tsps_ts2 > 0 &&
+              result.reply_tsps_ts2 - result.reply_tsps_ts3 > 0) ||
+              (result.reply_tsps_ts3 - result.reply_tsps_ts3 > 1 &&
+               result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
+            dec_cnt += 1
+          end
+        end
+        # went from a 4stamp to a 3stamp
+        # if (ts1-ts2 > 0 && ts2-ts3 < 0) || (ts3-ts2 > 1 && ts2-ts1 >1) once
+        if dec_cnt > 1
+          log(err_message + "(4|2->3 stamps indicating reverse path STRONG)")
+          @dealias_result.alias_validity_check << "FRS"
+        else
+          log(err_message + "(4|2->3 stamps indicating reverse path WEAK)")
+          @dealias_result.alias_validity_check << "FRW"
+        end
+        @dealias_result.overall = "NOALIAS"
+      end
     end
     
     if stamp_types[:no_stamp] > 0
@@ -1047,6 +1111,11 @@ class TspsDealiasRetPathCheckTask
   end
   
   def process_reply_probes(probes)
+    if @ipa == @dealias_result.ipa
+      dump_replies(@dealias_result, "B|ABAB", probes)
+    else
+      dump_replies(@dealias_result, "A|BABA", probes)
+    end
     stamp_types = classify_stamps(probes)
     
     if stamp_types[:reply_cnt] == 0
@@ -1229,10 +1298,12 @@ class TspsDealiasSharedClockTask
   def process_reply_probes(replies)
     stamp_types = classify_stamps(replies)
     if @state == :midnight_epoch_a
+      dump_replies(@dealias_result, "A|BBBB", replies)
       @ipa_offset = stamp_types[:two_stamps] > 0 && 
         is_midnight_offset(replies, stamp_types)
       @state = :midnight_epoch_b
     elsif @state == :midnight_epoch_b
+      dump_replies(@dealias_result, "B|AAAA", replies)
       @ipb_offset = stamp_types[:two_stamps] > 0 && 
         is_midnight_offset(replies, stamp_types)
       if @ipa_offset && @ipb_offset
@@ -1369,10 +1440,12 @@ class TspsDealiasDistanceLoopTask
 
   def process_reply_probes(replies)
     if @state == :probe_ipa
+      dump_replies(@dealias_result, "A|", replies)
       @ipa_ttl = get_return_ttl(@ipa, replies)
       @state = :probe_ipb
       return
     else
+      dump_replies(@dealias_result, "B|", replies)
       @ipb_ttl = get_return_ttl(@ipb, replies)
       
       unless @ipa_ttl && @ipb_ttl
@@ -1461,6 +1534,41 @@ end
 
 def log(message)
   $stderr.puts message if $options.full
+end
+
+def rtt(result)
+  return "-" if !result.responded?
+  tx = Time.at(result.tx_sec, result.tx_usec)
+  rx = Time.at(result.rx_sec, result.rx_usec)
+  (rx-tx) * 1000
+end
+
+def dump_replies(dealias_result, type_str, probes)
+  probes.each do |probe|
+    result = probe.result
+    if result.reply_tsps_ip1
+      ts_str = result.reply_tsps_ip1 + "=" + result.reply_tsps_ts1.to_s
+      if result.reply_tsps_ip2
+        ts_str += "," + result.reply_tsps_ip2 + "=" + 
+          result.reply_tsps_ts2.to_s
+        if result.reply_tsps_ip3
+          ts_str += "," + result.reply_tsps_ip3 + "=" + 
+            result.reply_tsps_ts3.to_s
+          if result.reply_tsps_ip4
+            ts_str += "," + result.reply_tsps_ip4 + "=" + 
+              result.reply_tsps_ts4.to_s
+          end
+        end
+      end
+    else
+      ts_str = "-"
+    end
+    # dest|type_str|ts_str|reply_ttl|rtt
+    dealias_result.verbose << sprintf("< %s,%s|%s|%s|%s|%s\n", 
+                                      @dealias_result.ipa, @dealias_result.ipb,
+                                      type_str, ts_str, 
+                                      result.reply_ttl || "-", rtt(result))
+  end
 end
 
 #################################################################################
