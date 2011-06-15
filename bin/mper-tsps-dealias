@@ -36,14 +36,20 @@
 ##   suitability check.
 ##
 ##   Possible values are:
-##     P2S => Pass, Two Stamps
-##     P3S => Pass, Three Stamps (weeded out in alias check)
-##     P4S => Pass, Four Stamps
-##     FNR => Fail, No Reply 
-##     F1S => Fail, One Stamp
-##     FNS => Fail, No Stamps
-##     FVS => Fail, Varying Stamps (multiple stamping behaviours were oberved)
-##     FRP => Fail, Reverse Path (a 4 stamper elicited 2 or 3 stamps) (NOALIAS)
+##     P2S  => Pass, Two Stamps
+##     P3S  => Pass, Three Stamps (weeded out in alias check)
+##     P4S  => Pass, Four Stamps
+##     FNR  => Fail, No Reply 
+##     F1S  => Fail, One Stamp
+##     FN   => Fail, No Stamps
+##     FVS  => Fail, Varying Stamps (multiple stamping behaviours were 
+##                                      observed)
+##     FRD  => Fail, Reverse path Decrement (interface is on the reverse path,
+##                                           timestamps decremented)
+##     FRG  => Fail, Reverse path Gap (interface is on the reverse path,
+##                                     gap between timestamps
+##     FRU  => Fail, Reverse path Unknown (interface *probably* on the reverse 
+##                                         path, inconclusive timestamps)
 ##
 ## <reverse_path> OPTIONAL
 ##   The reverse path check is only performed if 
@@ -52,13 +58,13 @@
 ##   is in fact in the return path from A.
 ##
 ##   Possible values are:
-##     FNR => Fail, No Reply
-##     FVS => Fail, Varying Stamps
-##     FNS => Not enough data to make a conclusion (UNKNOWN-NOALIAS)
-##     F1S => Should not happen (load balancing?) (ERROR)
-##     F2S => A is in the fwd path, but not reverse? (UNKNOWN-NOALIAS)
-##     F3S => A is in both fwd and reverse path (NOALIAS)
-##     F4S => Should not happen (ERROR)
+##     FNR     => Fail, No Reply
+##     FVS     => Fail, Varying Stamps
+##     FNS     => Not enough data to make a conclusion (UNKNOWN-NOALIAS)
+##     F1S     => Should not happen (load balancing?) (ERROR)
+##     F2[DGU] => A is in the fwd path, but not reverse? (see FR* above)
+##     F3[DGU] => A is in both fwd and reverse path (see FR* above)
+##     F4S     => Should not happen (ERROR)
 ##
 ## <alias_check> OPTIONAL
 ##   The alias check is only performed if both IPa and IPb pass the 
@@ -96,7 +102,8 @@
 ## 
 ##   Possible values are:
 ##     ALIAS            => Confirmed as aliases.
-##     NOALIAS          => Confirmed to not be aliases.
+##     NOALIAS-WEAK     => Low-confidence non-aliases
+##     NOALIAS-STRONG   => High-confidence non-aliases
 ##     UNKNOWN          => A determination could not be made.
 ##     UNKNOWN-REPROBE  => Could potentially be resolved by reprobing.
 ##     UNKNOWN-ALIAS    => Are probably aliases but cannot be confirmed.
@@ -971,46 +978,63 @@ class TspsDealiasAliasCheckTask
     if suitresult =~ /P4S/ || suitresult =~ /P2S/
       if suitresult =~ /P4S/ && stamp_types[:two_stamps] > 0
         dec_cnt = 0
+        var_cnt = 0
         probes.each do |probe|
           result = probe.result
-          if (result.reply_tsps_ts1 - result.reply_tsps_ts2 > 0) ||
-              (result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
-            dec_cnt += 1
+          if (result.reply_tsps_ts1 > result.reply_tsps_ts2)
+            dec_cnt +=1
+          end
+          if (result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
+            var_cnt += 1
           end
         end
         # went from a 4stamp to a 2stamp
         # if ts1-ts2 > 0 || ts2-ts1 > 1 more than once
         if dec_cnt > 1
-          log(err_message + "(4->2 stamps indicating reverse path STRONG)")
-          @dealias_result.alias_validity_check << "FRS"
+          log(err_message + "(4->2 stamps w. ts decrease STRONG)")
+          @dealias_result.alias_validity_check << "FRD"
+          @dealias_result.overall = "NOALIAS-STRONG"
+        elsif var_cnt > 1
+          log(err_message + "(4->2 stamps w. ts gap WEAK)")
+          @dealias_result.alias_validity_check << "FRG"
+          @dealias_result.overall = "NOALIAS-WEAK"
         else
-          log(err_message + "(4->2 stamps indicating reverse path WEAK)")
-          @dealias_result.alias_validity_check << "FRW"
+          log(err_message + "(4->2 stamps w. inconclusive ts UNKNOWN)")
+          @dealias_result.alias_validity_check << "FRU"
+          @dealias_result.overall = "UNKNOWN-NOALIAS"
         end
-        @dealias_result.overall = "NOALIAS"
         return false
       elsif (suitresult =~ /P4S/ && stamp_types[:three_stamps] > 0) ||
           (suitresult =~ /P2S/ && stamp_types[:three_stamps] > 0)
         dec_cnt = 0
+        var_cnt = 0
         probes.each do |probe|
           result = probe.result
-          if (result.reply_tsps_ts1 - result.reply_tsps_ts2 > 0 &&
-              result.reply_tsps_ts2 - result.reply_tsps_ts3 > 0) ||
-              (result.reply_tsps_ts3 - result.reply_tsps_ts3 > 1 &&
-               result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
+          if (result.reply_tsps_ts1 > result.reply_tsps_ts2 &&
+              result.reply_tsps_ts2 < result.reply_tsps_ts3)
             dec_cnt += 1
+          end
+          if (result.reply_tsps_ts3 - result.reply_tsps_ts3 > 1 &&
+               result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
+            var_cnt += 1
           end
         end
         # went from a 4stamp to a 3stamp
         # if (ts1-ts2 > 0 && ts2-ts3 < 0) || (ts3-ts2 > 1 && ts2-ts1 >1) once
-        if dec_cnt > 1
-          log(err_message + "(4|2->3 stamps indicating reverse path STRONG)")
+        if dec_cnt >= 1
+          log(err_message + "(4|2->3 stamps w. ts decrease STRONG)")
           @dealias_result.alias_validity_check << "FRS"
-        else
-          log(err_message + "(4|2->3 stamps indicating reverse path WEAK)")
+          @dealias_result.overall = "NOALIAS-STRONG"
+        elsif var_cnt >= 1
+          log(err_message + "(4|2->3 stamps w. ts gap WEAK)")
           @dealias_result.alias_validity_check << "FRW"
+          @dealias_result.overall = "NOALIAS-WEAK"
+        else
+          log(err_message + "(4|2->3 stamps w. inconclusive ts UNKNOWN)")
+          @dealias_result.alias_validity_check << "FRU"
+          @dealias_result.overall = "UNKNOWN-NOALIAS"
         end
-        @dealias_result.overall = "NOALIAS"
+        return false
       end
     end
     
@@ -1145,15 +1169,74 @@ class TspsDealiasRetPathCheckTask
     end
 
     if stamp_types[:two_stamps] > 0
-      log(@err_message + "(two stamps)")
-      @dealias_result.ret_path = "F2S"
-      @dealias_result.overall = "UNKNOWN-NOALIAS"
+      # if find 2 or more probes which exhibit:
+      # ts1 > ts2
+      # $$ strong non-alias
+      # else
+      # if ts2-ts1 > 1 
+      # $$ weak non-alias
+      # else
+      # $$ unknown-noalias
+      dec_cnt = 0
+      var_cnt = 0
+      probes.each do |probe|
+        result = probe.result
+        if (result.reply_tsps_ts1 > result.reply_tsps_ts2)
+          dec_cnt +=1
+        end
+        if (result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
+          var_cnt += 1
+        end
+      end
+      if dec_cnt > 1
+        log(err_message + "(2 stamps w. ts decrease STRONG)")
+        @dealias_result.ret_path = "F2D"
+        @dealias_result.overall = "NOALIAS-STRONG"
+      elsif var_cnt > 1
+        log(err_message + "(2 stamps w. ts gap WEAK)")
+        @dealias_result.ret_path = "F2G"
+        @dealias_result.overall = "NOALIAS-WEAK"
+      else
+        log(err_message + "(2 stamps w. inconclusive ts UNKNOWN)")
+        @dealias_result.ret_path = "F2U"
+        @dealias_result.overall = "UNKNOWN-NOALIAS"
+      end
     end
 
     if stamp_types[:three_stamps] > 0
-      log(@err_message + "(three stamps)")
-      @dealias_result.ret_path = "F3S"
-      @dealias_result.overall = "NOALIAS"
+      # find a probe which exhibits:
+      # ts2 < ts1 && ts1 <= ts3
+      # $$ strong non-alias
+      # else if ts3-ts2 > 1 && ts2-ts1 > 1
+      # $$ weak non-alias
+      # else
+      # $$ uknown-nonalias
+      dec_cnt = 0
+      var_cnt = 0
+      probes.each do |probe|
+        result = probe.result
+        if (result.reply_tsps_ts1 > result.reply_tsps_ts2 &&
+            result.reply_tsps_ts2 < result.reply_tsps_ts3)
+          dec_cnt += 1
+        end
+        if (result.reply_tsps_ts3 - result.reply_tsps_ts3 > 1 &&
+            result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
+          var_cnt += 1
+        end
+      end
+      if dec_cnt >= 1
+        log(err_message + "(3 stamps w. ts decrease STRONG)")
+        @dealias_result.ret_path = "F4S"
+        @dealias_result.overall = "NOALIAS-STRONG"
+      elsif var_cnt >= 1
+        log(err_message + "(3 stamps w. ts gap WEAK)")
+        @dealias_result.ret_path = "F4W"
+        @dealias_result.overall = "NOALIAS-WEAK"
+      else
+        log(err_message + "(3 stamps w. inconclusive ts UNKNOWN)")
+        @dealias_result.ret_path = "F4U"
+        @dealias_result.overall = "UNKNOWN-NOALIAS"
+      end
     end
 
     if stamp_types[:four_stamps] > 0
@@ -1243,7 +1326,8 @@ class TspsDealiasSharedClockTask
     if dec_ts > 0
       log(@err_message + "(decrementing timestamp)")
       @dealias_result.shared_clk = "FDT#{dec_ts}"
-      @dealias_result.overall = dec_ts == 0 ? "UNKNOWN-REPROBE" : "NOALIAS"
+      @dealias_result.overall = dec_ts == 0 ? "UNKNOWN-REPROBE" : 
+        "NOALIAS-STRONG"
       @state = :done
       return
     end
