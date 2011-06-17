@@ -117,6 +117,7 @@ static ID iv_delegate, iv_reqnum, iv_responded, iv_probe_src, iv_probe_dest;
 static ID iv_udata, iv_tx_sec, iv_tx_usec, iv_rx_sec, iv_rx_usec;
 static ID iv_probe_ttl, iv_probe_ipid, iv_reply_src, iv_reply_ttl;
 static ID iv_reply_qttl, iv_reply_ipid, iv_reply_icmp, iv_reply_tcp;
+static ID iv_reply_rr;
 static ID iv_reply_tsps_ts1, iv_reply_tsps_ip1;
 static ID iv_reply_tsps_ts2, iv_reply_tsps_ip2;
 static ID iv_reply_tsps_ts3, iv_reply_tsps_ip3;
@@ -349,6 +350,10 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 
     case KC_REPLY_TCP_OPT:
       rb_ivar_set(result, iv_reply_tcp, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_RR_OPT:
+      rb_ivar_set(result, iv_reply_rr, rb_str_new2(resp_words[i].cw_str));
       break;
 
     case KC_REPLY_TSPS_TS1_OPT:
@@ -769,7 +774,8 @@ static VALUE
 mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  VALUE vreqnum, vdest, vspacing, vtsps;
+  VALUE vreqnum, vdest, vspacing, vrr, vtsps;
+  uint16_t rr;
   uint32_t reqnum, spacing;
   int rtspsc = 0;
   VALUE *rtsps = NULL;
@@ -781,13 +787,15 @@ mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
   int opt_cnt = 3; /* the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
-  rb_scan_args(argc, argv, "22", &vreqnum, &vdest, &vspacing, &vtsps);
+  rb_scan_args(argc, argv, "23", &vreqnum, &vdest, &vspacing, &vrr, &vtsps);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
   spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
   if (spacing > 2147483647) { spacing = 2147483647; }
+
+  rr = (NIL_P(vrr) ? 0 : (uint16_t)NUM2UINT(vrr));
 
   if(!NIL_P(vtsps) && rb_type(vtsps) == T_ARRAY)
     {
@@ -802,6 +810,12 @@ mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
   if (spacing > 0) 
     {
       SET_UINT_CWORD(data->words, opt_cnt, SPACING, spacing);
+      opt_cnt++;
+    }
+
+  if(rr > 0)
+    {
+      SET_UINT_CWORD(data->words, opt_cnt, RR, rr);
       opt_cnt++;
     }
 
@@ -1233,6 +1247,7 @@ Init_mperio(void)
   IV_INTERN(reply_src);
   IV_INTERN(reply_ttl);
   IV_INTERN(reply_qttl);
+  IV_INTERN(reply_rr);
   IV_INTERN(reply_tsps_ts1);
   IV_INTERN(reply_tsps_ip1);
   IV_INTERN(reply_tsps_ts2);
