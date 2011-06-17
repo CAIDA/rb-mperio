@@ -353,6 +353,7 @@ class TspsDealiasManager
     #  printf "probing (%s|%s) @ %d\n", probe.dest, tsps_ips_s, probe.id 
     # end
     @pending_probes[probe.id] = probe
+    # $stderr.puts probe.id
     @mperio.ping_icmp probe.id, probe.dest, $options.spacing, probe.tsps_ips
   end
   
@@ -570,7 +571,7 @@ class TspsDealiasSuitabilityTask
   end
 
   def next_state
-    if @passed
+    if @passed && @candidates[1]
       return TspsDealiasAliasCheckTask.new(@candidates, @dealias_result)
     else
       return nil
@@ -981,6 +982,10 @@ class TspsDealiasAliasCheckTask
         var_cnt = 0
         probes.each do |probe|
           result = probe.result
+          unless result.responded? && result.reply_tsps_ts1 && 
+              result.reply_tsps_ts2 
+            next
+          end
           if (result.reply_tsps_ts1 > result.reply_tsps_ts2)
             dec_cnt +=1
           end
@@ -1010,6 +1015,10 @@ class TspsDealiasAliasCheckTask
         var_cnt = 0
         probes.each do |probe|
           result = probe.result
+          unless result.responded? && result.reply_tsps_ts1 && 
+              result.reply_tsps_ts2 && result.reply_tsps_ts3
+            next
+          end
           if (result.reply_tsps_ts1 > result.reply_tsps_ts2 &&
               result.reply_tsps_ts2 < result.reply_tsps_ts3)
             dec_cnt += 1
@@ -1181,6 +1190,10 @@ class TspsDealiasRetPathCheckTask
       var_cnt = 0
       probes.each do |probe|
         result = probe.result
+        unless result.responded? && result.reply_tsps_ts1 && 
+            result.reply_tsps_ts2
+          next
+        end
         if (result.reply_tsps_ts1 > result.reply_tsps_ts2)
           dec_cnt +=1
         end
@@ -1189,15 +1202,15 @@ class TspsDealiasRetPathCheckTask
         end
       end
       if dec_cnt > 1
-        log(err_message + "(2 stamps w. ts decrease STRONG)")
+        log(@err_message + "(2 stamps w. ts decrease STRONG)")
         @dealias_result.ret_path = "F2D"
         @dealias_result.overall = "NOALIAS-STRONG"
       elsif var_cnt > 1
-        log(err_message + "(2 stamps w. ts gap WEAK)")
+        log(@err_message + "(2 stamps w. ts gap WEAK)")
         @dealias_result.ret_path = "F2G"
         @dealias_result.overall = "NOALIAS-WEAK"
       else
-        log(err_message + "(2 stamps w. inconclusive ts UNKNOWN)")
+        log(@err_message + "(2 stamps w. inconclusive ts UNKNOWN)")
         @dealias_result.ret_path = "F2U"
         @dealias_result.overall = "UNKNOWN-NOALIAS"
       end
@@ -1215,6 +1228,10 @@ class TspsDealiasRetPathCheckTask
       var_cnt = 0
       probes.each do |probe|
         result = probe.result
+        unless result.responded? && result.reply_tsps_ts1 && 
+            result.reply_tsps_ts2 && result.reply_tsps_ts3
+          next
+        end
         if (result.reply_tsps_ts1 > result.reply_tsps_ts2 &&
             result.reply_tsps_ts2 < result.reply_tsps_ts3)
           dec_cnt += 1
@@ -1225,15 +1242,15 @@ class TspsDealiasRetPathCheckTask
         end
       end
       if dec_cnt >= 1
-        log(err_message + "(3 stamps w. ts decrease STRONG)")
+        log(@err_message + "(3 stamps w. ts decrease STRONG)")
         @dealias_result.ret_path = "F4S"
         @dealias_result.overall = "NOALIAS-STRONG"
       elsif var_cnt >= 1
-        log(err_message + "(3 stamps w. ts gap WEAK)")
+        log(@err_message + "(3 stamps w. ts gap WEAK)")
         @dealias_result.ret_path = "F4W"
         @dealias_result.overall = "NOALIAS-WEAK"
       else
-        log(err_message + "(3 stamps w. inconclusive ts UNKNOWN)")
+        log(@err_message + "(3 stamps w. inconclusive ts UNKNOWN)")
         @dealias_result.ret_path = "F4U"
         @dealias_result.overall = "UNKNOWN-NOALIAS"
       end
