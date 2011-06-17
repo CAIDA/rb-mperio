@@ -872,6 +872,12 @@ mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
   spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
   if (spacing > 2147483647) { spacing = 2147483647; }
 
+  if(!NIL_P(vtsps) && rb_type(vtsps) == T_ARRAY)
+    {
+      rtsps = RARRAY_PTR(RARRAY(vtsps));
+      rtspsc = RARRAY_LEN(RARRAY(vtsps));
+    }
+
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
