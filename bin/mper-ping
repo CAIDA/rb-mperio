@@ -22,6 +22,7 @@ $options.mper_port = 1
 $options.probing_method = :icmp
 $options.spacing = 0
 $options.log_path = nil  # disable logging by default
+$options.rr = 0
 
 opts = OptionParser.new
 
@@ -61,6 +62,11 @@ opts.on("--ttl", "=NUM", Integer,
   $options.ttl = v
 end
 
+opts.on("--rr", TrueClass, 
+        "enable Record Route IP option") do |v|
+  $options.rr = 1
+end
+
 opts.on("--dport", "=NUM", Integer,
 	"destination port for TCP probes (default: 80)") do |v|
   $options.dport = v
@@ -72,7 +78,7 @@ opts.on("--mper-port", "=NUM", Integer,
 end
 
 opts.on("--tsps-ip", "=ADDR1[,ADDR2-4]", String,
-        "timestamp prespecified addresses") do |v|
+        "timestamp prespecified addresses (disables --rr)") do |v|
   $options.tsps = v.split(",")
 end
 
@@ -86,6 +92,7 @@ end
 
 begin
   ARGV.replace opts.parse(*ARGV)
+  $options.rr = 0 if $options.tsps
 rescue OptionParser::ParseError
   $stderr.puts "ERROR: " + $!.to_s
   $stderr.puts opts
@@ -180,12 +187,13 @@ class ProgressOutput
     tsps4 = result.reply_tsps_ip4 ? 
       sprintf("%s:%d", result.reply_tsps_ip4, result.reply_tsps_ts4) : 
       "-"
+    rr = result.reply_rr || "-"
 
-    ptrn = "%s\t%d\t%s\t%d\t%s\t%s\t%s\t0\t%d.%06d\t%s\t%s\t%s\t%s";
+    ptrn = "%s\t%d\t%s\t%d\t%s\t%s\t%s\t0\t%d.%06d\t%s\t%s\t%s\t%s\t%s";
     sprintf ptrn,
       result.reply_src, result.reply_ttl, qttl, result.reply_ipid,
       icmp_type, icmp_code, tcp_flags, result.rx_sec, result.rx_usec,
-      tsps1, tsps2, tsps3, tsps4
+      tsps1, tsps2, tsps3, tsps4, rr
   end
 
 end
@@ -246,10 +254,10 @@ class Prober
       case $options.probing_method
       when :icmp_indir
         @mperio.ping_icmp_indir @target_id.advance, target, $options.ttl,
-        0, $options.spacing, $options.tsps
+        0, $options.spacing, $options.rr, $options.tsps
       when :icmp
         @mperio.ping_icmp @target_id.advance, target, 
-        $options.spacing, $options.tsps
+        $options.spacing, $options.rr, $options.tsps
 
       when :tcp
         @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80),
