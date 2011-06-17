@@ -56,6 +56,11 @@ opts.on("--udp", TrueClass, "probe with UDP") do |v|
   $options.probing_method = :udp
 end
 
+opts.on("--ttl", "=NUM", Integer,
+        "TTL for at which the packet should expire (default: unset)") do |v|
+  $options.ttl = v
+end
+
 opts.on("--dport", "=NUM", Integer,
 	"destination port for TCP probes (default: 80)") do |v|
   $options.dport = v
@@ -211,7 +216,12 @@ class Prober
     @targets = targets
     @target_id = TargetID.new
 
-    @technique = $options.probing_method.to_s + "-dir"
+    if $options.ttl
+      $options.probing_method = :icmp_indir
+      @technique = "icmp-indir"
+    else
+      @technique = $options.probing_method.to_s + "-dir"
+    end
     @active_count = 0
     @reached_concurrency = false
   end
@@ -234,9 +244,12 @@ class Prober
     if target
       printf "probing %s @ %d\n", target, @target_id.id if $options.verbose
       case $options.probing_method
+      when :icmp_indir
+        @mperio.ping_icmp_indir @target_id.advance, target, $options.ttl,
+        0, $options.spacing, $options.tsps
       when :icmp
         @mperio.ping_icmp @target_id.advance, target, 
-         $options.spacing, $options.tsps
+        $options.spacing, $options.tsps
 
       when :tcp
         @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80),
