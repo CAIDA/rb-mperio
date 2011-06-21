@@ -299,9 +299,9 @@ class TspsDealiasManager
     # the list of tasks (must implement next_probe, receive_probe and taskid)
     @pending_tasks = []
     @next_task_id = 1
-    
+
     @pending_probes = {}
-    @next_probe_id = 0
+    @next_probe_id = 1
     
     # initialize the list of candidates to probe
     if $options.candidate_path
@@ -376,11 +376,10 @@ class TspsDealiasManager
   end
   
   def mperio_on_more
-    @more = false
-    
     # fill the task list
     fill_task_queue()
     
+    # send the next probe - whatever it may be
     probe_next_task()
 
     if @pending_tasks.length == 0 && @pending_probes.length == 0
@@ -391,38 +390,53 @@ class TspsDealiasManager
   def probe_next_task
     task_cnt = @pending_tasks.length
 
+    # we allow ourselves at most one pass through the list
+    # if no tasks can muster up a probe to send after one
+    # pass, then we're either done, or they are all waiting
+    # for responses, we might as well wait too.
     task_cnt.times do |i|
-      task = @pending_tasks[i]
+      # remove the next task from the head of the list
+      task = @pending_tasks.shift
+
+      # the list is empty - all tasks are complete
       unless task
         break
       end
-
-      #remove the task from the 'head' of the list
-      @pending_tasks.delete task
       
       # no need to continue probing it
       if task.is_complete
+        # add another task (if there are any remaining)
         fill_task_queue()
+        # we haven't managed to send a probe yet, keep trying
         probe_next_task()
+        # we either sent a probe, or we completed a full cycle,
+        # either way, we're not going to look for any more probes
+        break
       else
-        #append it to the 'tail' of the list
+        # the task is still active
+        # append it to the 'tail' of the list
         @pending_tasks.push task
         
         # ask for the next probe it wants to send
         probe =  task.next_probe
         if probe
+          # it still has a probe that it would like to send
           queue_probe(task, probe)
+          # at this point, we have definitely sent a probe
+          # no more more
+          @more = false
+          # the probe is sent, lets not send any more until mper asks us to
           break
         else
+          # we didn't manage to send a probe, so let's keep that in mind
           @more = true
-          break
         end
       end
     end
   end
   
   def mperio_on_data(result)
-    #printf "mperio_on_data: %p\n", result if $options.verbose
+    #printf "mperio_on_data: %p\n", result #if $options.verbose
 
     probe = match_result(result)
 
