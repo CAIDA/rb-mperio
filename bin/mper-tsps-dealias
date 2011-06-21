@@ -353,7 +353,6 @@ class TspsDealiasManager
     #  printf "probing (%s|%s) @ %d\n", probe.dest, tsps_ips_s, probe.id 
     # end
     @pending_probes[probe.id] = probe
-    # $stderr.puts probe.id
     @mperio.ping_icmp probe.id, probe.dest, $options.spacing, nil, probe.tsps_ips
   end
   
@@ -377,7 +376,6 @@ class TspsDealiasManager
   end
   
   def mperio_on_more
-    # puts "more" if $options.verbose
     @more = false
     
     # fill the task list
@@ -414,6 +412,7 @@ class TspsDealiasManager
         probe =  task.next_probe
         if probe
           queue_probe(task, probe)
+          break
         else
           @more = true
           break
