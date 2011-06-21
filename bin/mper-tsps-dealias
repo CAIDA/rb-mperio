@@ -354,7 +354,7 @@ class TspsDealiasManager
     # end
     @pending_probes[probe.id] = probe
     # $stderr.puts probe.id
-    @mperio.ping_icmp probe.id, probe.dest, $options.spacing, probe.tsps_ips
+    @mperio.ping_icmp probe.id, probe.dest, $options.spacing, nil, probe.tsps_ips
   end
   
   ####
