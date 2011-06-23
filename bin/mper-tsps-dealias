@@ -150,6 +150,12 @@ opts.on("-c", "--candidates=PATH",
   $options.candidate_path = v
 end
 
+opts.on("-b", "--suitability-results=PATH",
+        "file with results of suitability checking") do |v|
+  $stderr.puts v
+  $options.suitability_results = v
+end
+
 opts.on("-n", "--concurrency=NUM", Integer,
         "max pairs to dealias concurrently (default: unlimited)") do |v|
   $options.concurrency = v
@@ -191,8 +197,10 @@ unless $options.mper_port
   exit -1
 end
 
-unless $options.candidate_path || ARGV.length >= 1
-  $stderr.puts "ERROR: candidate file path "\
+unless $options.suitability_results || $options.candidate_path || 
+    ARGV.length >= 1
+  $stderr.puts "ERROR: candidate file path, "\
+    "suitability results file, "\
     "or both IPa and IPb must be specified\n\n"
   $stderr.puts opts
   exit -1
@@ -230,6 +238,44 @@ class CandidateFile
         else
           @done = true
           @current_candidate = nil
+          break
+        end
+      end
+    end
+    return @current_candidate
+  end
+
+end
+
+class ResultsFile
+
+  attr_reader :current_candidate, :current_result
+
+  def initialize(candidate_path)
+    @candidate_path = candidate_path
+    @candidate_io = File.open candidate_path
+    @done = false
+    advance
+  end
+
+  def advance
+    if @done
+      @current_candidate = nil
+      @current_result = nil
+    else
+      loop do
+        line = @candidate_io.gets
+        if line
+          next if line =~ /^#/ || line =~ /^\s*$/
+          line.chomp!
+          elems = line.split(/\|/)
+          @current_candidate = elems[0].split(/,/)
+          @current_result = elems[1].split(/,/)
+          break
+        else
+          @done = true
+          @current_candidate = nil
+          @current_result = nil
           break
         end
       end
@@ -304,7 +350,9 @@ class TspsDealiasManager
     @next_probe_id = 1
     
     # initialize the list of candidates to probe
-    if $options.candidate_path
+    if $options.suitability_results
+      @candidates = ResultsFile.new $options.suitability_results
+    elsif $options.candidate_path
       @candidates = CandidateFile.new $options.candidate_path
     else
       @candidates = ImmediateCandidates.new ARGV
@@ -369,7 +417,8 @@ class TspsDealiasManager
         @reached_concurrency = true
         break
       end
-      task = TspsDealiasTask.new(get_next_task_id(), candidates)
+      results = $options.suitability_results ? @candidates.current_result : nil
+      task = TspsDealiasTask.new(get_next_task_id(), candidates, results)
       @pending_tasks.push task
       @candidates.advance
     end
@@ -521,19 +570,27 @@ class TspsDealiasTask
 
   attr_reader :taskid, :last_reply
 
-  def initialize(taskid, candidates)
+  def initialize(taskid, candidates, results)
     @ipa = candidates[0]
     @ipb = candidates[1]
     @taskid = taskid
     @candidates = candidates
+    @results = results
     @last_reply = Time.at(0)
 
     log("#{@ipa},#{@ipb}: dealiasing starting");
 
     @dealias_result = DealiasResult.new(@ipa, @ipb)
     @is_complete = false
-    @current_state = TspsDealiasSuitabilityTask.new(candidates, 
-                                                    @dealias_result)
+
+    if @results
+      @dealias_result.suit_check = @results
+      @current_state = TspsDealiasAliasCheckTask.new(@candidates, 
+                                                     @dealias_result)
+    else
+      @current_state = TspsDealiasSuitabilityTask.new(candidates, 
+                                                      @dealias_result)
+    end
   end
 
   def to_s
