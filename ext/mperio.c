@@ -116,7 +116,7 @@ typedef struct {
   uint16_t probe_ttl;
   uint16_t max_ttl;
   uint16_t tos;
-  uint16_t reply_count;
+  uint16_t reply_cnt;
   char *src_addr;
 
   union
@@ -124,7 +124,7 @@ typedef struct {
     struct icmp
     {
       int rr;
-      char tsps[4];
+      char *tsps[4];
       int tspsc;
       uint16_t cksum;
     } om_icmp;
@@ -154,6 +154,15 @@ typedef struct {
 #define MPERIO_PING_METHOD_ICMP  0
 #define MPERIO_PING_METHOD_UDP   1
 #define MPERIO_PING_METHOD_TCP   2
+
+#define CHECK_PARSE_INT(out, type, opt) ((rb_type(opt) == T_FIXNUM || \
+					   NIL_P(opt)) &&		\
+					  ((out = PARSE_INT(type, opt)) || 1))
+#define PARSE_INT(type, opt) (NIL_P(opt) ? 0 : (type)NUM2UINT(opt))
+
+
+#define CHECK_PARSE_STR(out, opt) ((rb_type(opt) == T_STRING) && \
+				   (out = RSTRING_PTR(opt)))
 
 static VALUE cMperIO, cPingResult;
 
@@ -830,10 +839,12 @@ static int process_options(VALUE options, int probe_method,
 {
   VALUE *opts;
   int opts_len;
-  int i;
+  int i, j;
 
   VALUE opt;
   ID opt_type;
+
+  VALUE *rtsps;
 
   if(options_out == NULL)
     {
@@ -851,32 +862,48 @@ static int process_options(VALUE options, int probe_method,
       /* common options */
       if(opt_type == sym_spacing)
 	{
-	  options_out->spacing = (NIL_P(opt) ? 0 : (uint32_t)NUM2UINT(opt));
+	  if(!CHECK_PARSE_INT(options_out->spacing, uint32_t, opt))
+	    goto err;
 	  scamper_debug(__func__, "got spacing opt: %d", options_out->spacing);
 	}
       else if(opt_type == sym_timeout)
 	{
-	  scamper_debug(__func__, "got timeout opt");
+	  if(!CHECK_PARSE_INT(options_out->timeout, uint32_t, opt))
+	    goto err;
+	  scamper_debug(__func__, "got timeout opt: %d", options_out->timeout);
 	}
       else if(opt_type == sym_probe_ttl)
 	{
-	  scamper_debug(__func__, "got probe_ttl opt");
+	  if(!CHECK_PARSE_INT(options_out->probe_ttl, uint16_t, opt))
+	    goto err;
+	  scamper_debug(__func__, "got probe_ttl opt: %d", 
+			options_out->probe_ttl);
 	}
       else if(opt_type == sym_max_ttl)
 	{
-	  scamper_debug(__func__, "got max_ttl opt");
+	  if(!CHECK_PARSE_INT(options_out->max_ttl, uint16_t, opt))
+	    goto err;
+	  scamper_debug(__func__, "got max_ttl opt: %d", options_out->max_ttl);
 	}
       else if(opt_type == sym_tos)
 	{
-	  scamper_debug(__func__, "got tos opt");
+	  if(!CHECK_PARSE_INT(options_out->tos, uint16_t, opt))
+	    goto err;
+	  scamper_debug(__func__, "got tos opt: %d", options_out->tos);
 	}
       else if(opt_type == sym_reply_cnt)
 	{
-	  scamper_debug(__func__, "got reply_cnt opt");
+	  if(!CHECK_PARSE_INT(options_out->reply_cnt, uint16_t, opt))
+	    goto err;
+	  scamper_debug(__func__, "got reply_cnt opt: %d", 
+			options_out->reply_cnt);
 	}
       else if(opt_type == sym_src_addr)
 	{
-	  scamper_debug(__func__, "got src_addr opt");
+	  if(!CHECK_PARSE_STR(options_out->src_addr, opt))
+	    goto err;
+	  scamper_debug(__func__, "got src_addr opt: %s", 
+			options_out->src_addr);
 	}
 
       /* icmp options */
@@ -884,15 +911,31 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_rr)
 	    {
-	      scamper_debug(__func__, "got rr opt");
+	      if(!CHECK_PARSE_INT(options_out->icmp_rr, int, opt))
+		  goto err;
+	      scamper_debug(__func__, "got rr opt: %d", options_out->icmp_rr);
 	    }
 	  else if(opt_type == sym_tsps)
 	    {
-	      scamper_debug(__func__, "got tsps opt");
+	      if(!NIL_P(opt) && rb_type(opt) == T_ARRAY)
+		{
+		  rtsps = RARRAY_PTR(opt);
+		  options_out->icmp_tspsc = RARRAY_LEN(opt);
+		  for(j=0;j<options_out->icmp_tspsc;j++)
+		    {
+		      if(!CHECK_PARSE_STR(options_out->icmp_tsps[j], rtsps[j]))
+			goto err;
+		    }
+		}
+	      scamper_debug(__func__, "got tsps opt tspsc: %d", 
+			    options_out->icmp_tspsc);
 	    }
 	  else if(opt_type == sym_cksum)
 	    {
-	      scamper_debug(__func__, "got cksum opt");
+	      if(!CHECK_PARSE_INT(options_out->icmp_cksum, uint16_t, opt))
+		  goto err;
+	      scamper_debug(__func__, "got cksum opt: %d", 
+			    options_out->icmp_cksum);
 	    }
 	  else
 	    {
@@ -906,7 +949,10 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_dport)
 	    {
-	      scamper_debug(__func__, "got dport opt");
+	      if(!CHECK_PARSE_INT(options_out->udp_dport, uint16_t, opt))
+		  goto err;
+	      scamper_debug(__func__, "got dport opt: %d", 
+			    options_out->udp_dport);
 	    }
 	  else
 	    {
@@ -920,7 +966,10 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_dport)
 	    {
-	      scamper_debug(__func__, "got dport opt");
+	      if(!CHECK_PARSE_INT(options_out->tcp_dport, uint16_t, opt))
+		  goto err;
+	      scamper_debug(__func__, "got dport opt: %d", 
+			    options_out->tcp_dport);
 	    }
 	  else
 	    {
@@ -936,6 +985,7 @@ static int process_options(VALUE options, int probe_method,
 	}
     }
 
+ err:
   return -1;
 }
 
