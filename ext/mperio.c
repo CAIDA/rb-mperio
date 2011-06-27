@@ -110,6 +110,50 @@ typedef struct {
 
 } mperio_data_t;
 
+typedef struct {
+  uint32_t spacing;
+  uint32_t timeout;
+  uint16_t probe_ttl;
+  uint16_t max_ttl;
+  uint16_t tos;
+  uint16_t reply_count;
+  char *src_addr;
+
+  union
+  {
+    struct icmp
+    {
+      int rr;
+      char tsps[4];
+      int tspsc;
+      uint16_t cksum;
+    } om_icmp;
+
+    struct udp
+    {
+      uint16_t dport;
+    } om_udp;
+
+    struct tcp
+    {
+      uint16_t dport;
+    } om_tcp;
+  } options_method_un;
+
+} options_t;
+
+#define icmp_rr    options_method_un.om_icmp.rr
+#define icmp_tsps  options_method_un.om_icmp.tsps
+#define icmp_tspsc options_method_un.om_icmp.tspsc
+#define icmp_cksum options_method_un.om_icmp.cksum
+
+#define udp_dport  options_method_un.om_udp.dport
+
+#define tcp_dport  options_method_un.om_tcp.dport
+
+#define MPERIO_PING_METHOD_ICMP  0
+#define MPERIO_PING_METHOD_UDP   1
+#define MPERIO_PING_METHOD_TCP   2
 
 static VALUE cMperIO, cPingResult;
 
@@ -129,6 +173,18 @@ static ID meth_source_read_data, meth_source_write_data;
 static ID meth_mperio_on_more, meth_mperio_on_data;
 static ID meth_mperio_on_error, meth_mperio_on_send_error;
 static ID meth_mperio_service_failure;
+
+/* ping method arg symbols */
+
+/* common */
+static ID sym_spacing, sym_timeout, sym_probe_ttl, sym_max_ttl; 
+static ID sym_tos, sym_reply_cnt, sym_src_addr;
+
+/* icmp */
+static ID sym_rr, sym_tsps, sym_cksum;
+
+/* udp and tcp */
+static ID sym_dport;
 
 static int connect_to_mper(int port, int use_tcp);
 static const char* extract_txt_option(mperio_data_t *data,
@@ -769,26 +825,157 @@ mperio_stop(VALUE self)
   return self;
 }
 
+static int process_options(VALUE options, int probe_method, 
+			   options_t *options_out)
+{
+  VALUE *opts;
+  int opts_len;
+  int i;
+
+  VALUE opt;
+  ID opt_type;
+
+  if(options_out == NULL)
+    {
+      return -1;
+    }
+
+  opts = RARRAY_PTR(options);
+  opts_len = RARRAY_LEN(options);
+
+  for(i=0;i<opts_len;i+=2)
+    {
+      opt_type = SYM2ID(opts[i]);
+      opt = opts[i+1];
+      
+      /* common options */
+      if(opt_type == sym_spacing)
+	{
+	  options_out->spacing = (NIL_P(opt) ? 0 : (uint32_t)NUM2UINT(opt));
+	  scamper_debug(__func__, "got spacing opt: %d", options_out->spacing);
+	}
+      else if(opt_type == sym_timeout)
+	{
+	  scamper_debug(__func__, "got timeout opt");
+	}
+      else if(opt_type == sym_probe_ttl)
+	{
+	  scamper_debug(__func__, "got probe_ttl opt");
+	}
+      else if(opt_type == sym_max_ttl)
+	{
+	  scamper_debug(__func__, "got max_ttl opt");
+	}
+      else if(opt_type == sym_tos)
+	{
+	  scamper_debug(__func__, "got tos opt");
+	}
+      else if(opt_type == sym_reply_cnt)
+	{
+	  scamper_debug(__func__, "got reply_cnt opt");
+	}
+      else if(opt_type == sym_src_addr)
+	{
+	  scamper_debug(__func__, "got src_addr opt");
+	}
+
+      /* icmp options */
+      else if(probe_method == MPERIO_PING_METHOD_ICMP)
+	{
+	  if(opt_type == sym_rr)
+	    {
+	      scamper_debug(__func__, "got rr opt");
+	    }
+	  else if(opt_type == sym_tsps)
+	    {
+	      scamper_debug(__func__, "got tsps opt");
+	    }
+	  else if(opt_type == sym_cksum)
+	    {
+	      scamper_debug(__func__, "got cksum opt");
+	    }
+	  else
+	    {
+	      scamper_debug(__func__, "invalid icmp option");
+	      return -1;
+	    }
+	}
+
+      /* udp options */
+      else if(probe_method == MPERIO_PING_METHOD_UDP)
+	{
+	  if(opt_type == sym_dport)
+	    {
+	      scamper_debug(__func__, "got dport opt");
+	    }
+	  else
+	    {
+	      scamper_debug(__func__, "invalid udp option");
+	      return -1;
+	    }
+	}
+
+      /* tcp options */
+      else if(probe_method == MPERIO_PING_METHOD_TCP)
+	{
+	  if(opt_type == sym_dport)
+	    {
+	      scamper_debug(__func__, "got dport opt");
+	    }
+	  else
+	    {
+	      scamper_debug(__func__, "invalid tcp option");
+	      return -1;
+	    }
+	}
+
+      else
+	{
+	  scamper_debug(__func__, "invalid method");
+	  return -1;
+	}
+    }
+
+  return -1;
+}
+
 
 static VALUE
 mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  VALUE vreqnum, vdest, vspacing, vrr, vtsps;
+
+  /* the unvalidated ruby args */
+  VALUE vreqnum, vdest, voptions;
+
+  /* VALUE vreqnum, vdest, vspacing, vrr, vtsps;
   uint16_t rr;
   uint32_t reqnum, spacing;
   int rtspsc = 0;
   VALUE *rtsps = NULL;
-  char *tspsaddr = NULL;
+  char *tspsaddr = NULL; */
+
+  /* the validated, parsed args */
+  options_t options;
+  uint32_t reqnum;
   const char *dest;
+
   const char *msg = NULL;
   size_t msg_len = 0;
   int i;
   int opt_cnt = 3; /* the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
-  rb_scan_args(argc, argv, "23", &vreqnum, &vdest, &vspacing, &vrr, &vtsps);
+  rb_scan_args(argc, argv, "2*", &vreqnum, &vdest, &voptions);
 
+  if(process_options(voptions, MPERIO_PING_METHOD_ICMP, &options) != 0)
+    {
+      /* how do we send an error message? */
+      scamper_debug(__func__, "options parsing failed");
+      return self; /* is this right? */
+    }
+
+#if 0
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
@@ -852,7 +1039,7 @@ mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
 
   msg = create_control_message(data->words, CMESSAGE_LEN(opt_cnt-1),
 			       &msg_len);
-
+#endif
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -1225,6 +1412,7 @@ mperio_write_unpause(VALUE self, VALUE fd_value)
 
 #define IV_INTERN(name) iv_##name = rb_intern("@" #name)
 #define METH_INTERN(name) meth_##name = rb_intern(#name)
+#define SYM_INTERN(name) sym_##name = rb_intern(#name)
 
 void
 Init_mperio(void)
@@ -1270,6 +1458,20 @@ Init_mperio(void)
   METH_INTERN(mperio_on_error);
   METH_INTERN(mperio_on_send_error);
   METH_INTERN(mperio_service_failure);
+
+  SYM_INTERN(spacing);
+  SYM_INTERN(timeout);
+  SYM_INTERN(probe_ttl);
+  SYM_INTERN(max_ttl);
+  SYM_INTERN(tos);
+  SYM_INTERN(reply_cnt);
+  SYM_INTERN(src_addr);
+
+  SYM_INTERN(rr);
+  SYM_INTERN(tsps);
+  SYM_INTERN(cksum);
+
+  SYM_INTERN(dport);
 
   /* XXX make MperIO a singleton */
   /* XXX fix message creation/parsing routines to not use static buffers */

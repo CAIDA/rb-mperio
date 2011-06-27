@@ -257,7 +257,9 @@ class Prober
         0, $options.spacing, $options.rr, $options.tsps
       when :icmp
         @mperio.ping_icmp @target_id.advance, target, 
-        $options.spacing, $options.rr, $options.tsps
+        :spacing, $options.spacing, :rr, $options.rr, :tsps, $options.tsps,
+        :timeout, 12, :probe_ttl, 2, :max_ttl, 244, :tos, 0x7f, :reply_cnt, 1,
+        :src_addr, "192.168.0.1", :cksum, 0xffff
 
       when :tcp
         @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80),
