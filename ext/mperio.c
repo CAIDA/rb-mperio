@@ -111,10 +111,11 @@ typedef struct {
 } mperio_data_t;
 
 typedef struct {
+  uint32_t flags;
+
   uint32_t spacing;
   uint32_t timeout;
-  uint16_t probe_ttl;
-  uint16_t max_ttl;
+  uint16_t ttl;
   uint16_t tos;
   uint16_t reply_cnt;
   char *src_addr;
@@ -151,14 +152,41 @@ typedef struct {
 
 #define tcp_dport  options_method_un.om_tcp.dport
 
+#define MPER_OPT_DEFAULT_SPACING    0
+#define MPER_OPT_DEFAULT_TIMEOUT    5000
+#define MPER_OPT_DEFAULT_TTL        255
+#define MPER_OPT_DEFAULT_TOS        0x0
+#define MPER_OPT_DEFAULT_REPLY_CNT  0 /* send all probes */
+#define MPER_OPT_DEFAULT_ICMP_RR    0
+#define MPER_OPT_DEFAULT_ICMP_CKSUM 0
+
+#define OPT_SPACING    0x00000001
+#define OPT_TIMEOUT    0x00000002
+#define OPT_TTL        0x00000004
+#define OPT_TOS        0x00000010
+#define OPT_REPLY_CNT  0x00000020
+#define OPT_SRC_ADDR   0x00000040
+
+#define OPT_ICMP_RR    0x00000100
+#define OPT_ICMP_TSPS  0x00000200
+#define OPT_ICMP_CKSUM 0x00000400
+
+#define OPT_UDP_DPORT  0x00001000
+
+#define OPT_TCP_DPORT  0x00010000
+
+#define SET_OPT_FLAG(options, flag) (options->flags |= flag)
+#define IS_OPT(options, flag) ((options->flags & flag) != 0)
+
 #define MPERIO_PING_METHOD_ICMP  0
 #define MPERIO_PING_METHOD_UDP   1
 #define MPERIO_PING_METHOD_TCP   2
 
-#define CHECK_PARSE_INT(out, type, opt) ((rb_type(opt) == T_FIXNUM || \
+#define CHECK_PARSE_INT(out, type, opt, def) ((rb_type(opt) == T_FIXNUM ||	\
 					   NIL_P(opt)) &&		\
-					  ((out = PARSE_INT(type, opt)) || 1))
-#define PARSE_INT(type, opt) (NIL_P(opt) ? 0 : (type)NUM2UINT(opt))
+					      ((out = PARSE_INT(type,opt,def)\
+						) || 1))
+#define PARSE_INT(type, opt, def) (NIL_P(opt) ? def : (type)NUM2UINT(opt))
 
 
 #define CHECK_PARSE_STR(out, opt) ((rb_type(opt) == T_STRING) && \
@@ -186,7 +214,7 @@ static ID meth_mperio_service_failure;
 /* ping method arg symbols */
 
 /* common */
-static ID sym_spacing, sym_timeout, sym_probe_ttl, sym_max_ttl; 
+static ID sym_spacing, sym_timeout, sym_ttl; 
 static ID sym_tos, sym_reply_cnt, sym_src_addr;
 
 /* icmp */
@@ -835,7 +863,7 @@ mperio_stop(VALUE self)
 }
 
 static int process_options(VALUE options, int probe_method, 
-			   options_t *options_out)
+			   options_t *options_out, const char **err_msg)
 {
   VALUE *opts;
   int opts_len;
@@ -851,59 +879,95 @@ static int process_options(VALUE options, int probe_method,
       return -1;
     }
 
+  options_out->flags = 0x0;
+
   opts = RARRAY_PTR(options);
   opts_len = RARRAY_LEN(options);
 
-  for(i=0;i<opts_len;i+=2)
+  if((opts_len % 2) != 0)
     {
+      *err_msg = 
+	"optional arguments must be of the format: ':arg_name, arg_value'";
+      goto err;
+    }
+
+  for(i=0;i<opts_len-1;i+=2)
+    {
+      if(&opts[i] == NULL || rb_type(opts[i]) != T_SYMBOL)
+	{
+	  *err_msg = 
+	    "optional arguments must be of the format: ':arg_name, arg_value'";
+	  goto err;
+	}
       opt_type = SYM2ID(opts[i]);
       opt = opts[i+1];
       
       /* common options */
       if(opt_type == sym_spacing)
 	{
-	  if(!CHECK_PARSE_INT(options_out->spacing, uint32_t, opt))
-	    goto err;
-	  scamper_debug(__func__, "got spacing opt: %d", options_out->spacing);
+	  if(!CHECK_PARSE_INT(options_out->spacing, uint32_t, opt, 
+			      MPER_OPT_DEFAULT_SPACING) ||
+	     options_out->spacing < 0 || options_out->spacing > UINT32_MAX)
+	    {
+	      *err_msg = "spacing must be between 0 and 2^32";
+	      goto err;
+	    }
+	  SET_OPT_FLAG(options_out, OPT_SPACING);
 	}
       else if(opt_type == sym_timeout)
 	{
-	  if(!CHECK_PARSE_INT(options_out->timeout, uint32_t, opt))
-	    goto err;
-	  scamper_debug(__func__, "got timeout opt: %d", options_out->timeout);
+	  if(!CHECK_PARSE_INT(options_out->timeout, uint32_t, opt, 
+			      MPER_OPT_DEFAULT_TIMEOUT) ||
+	     options_out->timeout < 0 || options_out->timeout > UINT32_MAX)
+	    {
+	      *err_msg = "timeout must be between 0 and 2^32";
+	      goto err;
+	    }
+	  SET_OPT_FLAG(options_out, OPT_TIMEOUT);
 	}
-      else if(opt_type == sym_probe_ttl)
+      else if(opt_type == sym_ttl)
 	{
-	  if(!CHECK_PARSE_INT(options_out->probe_ttl, uint16_t, opt))
-	    goto err;
-	  scamper_debug(__func__, "got probe_ttl opt: %d", 
-			options_out->probe_ttl);
-	}
-      else if(opt_type == sym_max_ttl)
-	{
-	  if(!CHECK_PARSE_INT(options_out->max_ttl, uint16_t, opt))
-	    goto err;
-	  scamper_debug(__func__, "got max_ttl opt: %d", options_out->max_ttl);
+	  if(!CHECK_PARSE_INT(options_out->ttl, uint16_t, opt,
+			      MPER_OPT_DEFAULT_TTL) ||
+	     options_out->ttl < 1 || options_out->ttl > 255)
+	    {
+	      *err_msg = "ttl must be between 1 and 255";
+	      goto err;
+	    }
+	  SET_OPT_FLAG(options_out, OPT_TTL);
 	}
       else if(opt_type == sym_tos)
 	{
-	  if(!CHECK_PARSE_INT(options_out->tos, uint16_t, opt))
-	    goto err;
-	  scamper_debug(__func__, "got tos opt: %d", options_out->tos);
+	  if(!CHECK_PARSE_INT(options_out->tos, uint16_t, opt,
+			      MPER_OPT_DEFAULT_TOS) ||
+	     options_out->tos > 255)
+	    {
+	      *err_msg = "tos must be between 0 and 255";
+	      goto err;
+	    }
+	  SET_OPT_FLAG(options_out, OPT_TOS);
 	}
       else if(opt_type == sym_reply_cnt)
 	{
-	  if(!CHECK_PARSE_INT(options_out->reply_cnt, uint16_t, opt))
-	    goto err;
-	  scamper_debug(__func__, "got reply_cnt opt: %d", 
-			options_out->reply_cnt);
+	  if(!CHECK_PARSE_INT(options_out->reply_cnt, uint16_t, opt,
+			      MPER_OPT_DEFAULT_REPLY_CNT))
+	    {
+	      *err_msg = "reply cnt must be between 0 and 2^16";
+	      goto err;
+	    }
+	  SET_OPT_FLAG(options_out, OPT_REPLY_CNT);
 	}
       else if(opt_type == sym_src_addr)
 	{
-	  if(!CHECK_PARSE_STR(options_out->src_addr, opt))
-	    goto err;
-	  scamper_debug(__func__, "got src_addr opt: %s", 
-			options_out->src_addr);
+	  if(!NIL_P(opt))
+	    {
+	      if(!CHECK_PARSE_STR(options_out->src_addr, opt))
+		{
+		  *err_msg = "src_addr must be an address string";
+		  goto err;
+		}
+	      SET_OPT_FLAG(options_out, OPT_SRC_ADDR);
+	    }
 	}
 
       /* icmp options */
@@ -911,9 +975,14 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_rr)
 	    {
-	      if(!CHECK_PARSE_INT(options_out->icmp_rr, int, opt))
+	      if(!CHECK_PARSE_INT(options_out->icmp_rr, int, opt,
+				  MPER_OPT_DEFAULT_ICMP_RR) ||
+		 (options_out->icmp_rr != 0 && options_out->icmp_rr != 1))
+		{
+		  *err_msg = "icmp_rr must be 0 (off) or 1 (on)";
 		  goto err;
-	      scamper_debug(__func__, "got rr opt: %d", options_out->icmp_rr);
+		}
+	      SET_OPT_FLAG(options_out, OPT_ICMP_RR);
 	    }
 	  else if(opt_type == sym_tsps)
 	    {
@@ -921,26 +990,39 @@ static int process_options(VALUE options, int probe_method,
 		{
 		  rtsps = RARRAY_PTR(opt);
 		  options_out->icmp_tspsc = RARRAY_LEN(opt);
+		  if(options_out->icmp_tspsc > 4)
+		    {
+		      *err_msg = "max allowed tsps ips is 4";
+		      goto err;
+		    }
 		  for(j=0;j<options_out->icmp_tspsc;j++)
 		    {
 		      if(!CHECK_PARSE_STR(options_out->icmp_tsps[j], rtsps[j]))
-			goto err;
+			{
+			  *err_msg = "tsps ip must be an address string";
+			  goto err;
+			}
 		    }
+		  SET_OPT_FLAG(options_out, OPT_ICMP_TSPS);
 		}
-	      scamper_debug(__func__, "got tsps opt tspsc: %d", 
-			    options_out->icmp_tspsc);
 	    }
 	  else if(opt_type == sym_cksum)
 	    {
-	      if(!CHECK_PARSE_INT(options_out->icmp_cksum, uint16_t, opt))
-		  goto err;
-	      scamper_debug(__func__, "got cksum opt: %d", 
-			    options_out->icmp_cksum);
+	      if(!NIL_P(opt))
+		{
+		  if(!CHECK_PARSE_INT(options_out->icmp_cksum, uint16_t, opt,
+				      MPER_OPT_DEFAULT_ICMP_CKSUM))
+		    {
+		      *err_msg = "checksum must be between 0 and 2^16";
+		      goto err;
+		    }
+		  SET_OPT_FLAG(options_out, OPT_ICMP_CKSUM);
+		}
 	    }
 	  else
 	    {
-	      scamper_debug(__func__, "invalid icmp option");
-	      return -1;
+	      *err_msg = "invalid icmp option found";
+	      goto err;
 	    }
 	}
 
@@ -949,15 +1031,21 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_dport)
 	    {
-	      if(!CHECK_PARSE_INT(options_out->udp_dport, uint16_t, opt))
-		  goto err;
-	      scamper_debug(__func__, "got dport opt: %d", 
-			    options_out->udp_dport);
+	      if(!NIL_P(opt))
+		{
+		  if(!CHECK_PARSE_INT(options_out->udp_dport, uint16_t, opt,
+				      -1))
+		    {
+		      *err_msg = "udp_dport must be between 0 and 2^16";
+		      goto err;
+		    }
+		  SET_OPT_FLAG(options_out, OPT_UDP_DPORT);
+		}
 	    }
 	  else
 	    {
-	      scamper_debug(__func__, "invalid udp option");
-	      return -1;
+	      *err_msg = "invalid udp option found";
+	      goto err;
 	    }
 	}
 
@@ -966,50 +1054,88 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_dport)
 	    {
-	      if(!CHECK_PARSE_INT(options_out->tcp_dport, uint16_t, opt))
-		  goto err;
-	      scamper_debug(__func__, "got dport opt: %d", 
-			    options_out->tcp_dport);
+	      if(!NIL_P(opt))
+		{
+		  if(!CHECK_PARSE_INT(options_out->tcp_dport, uint16_t, opt,
+				      -1))
+		    {
+		      *err_msg = "tcp_dport must be between 0 and 2^16";
+		      goto err;
+		    }
+		  SET_OPT_FLAG(options_out, OPT_TCP_DPORT);
+		}
 	    }
 	  else
 	    {
-	      scamper_debug(__func__, "invalid tcp option");
-	      return -1;
+	      *err_msg = "invalid tcp option found";
+	      goto err;
 	    }
 	}
 
       else
 	{
-	  scamper_debug(__func__, "invalid method");
-	  return -1;
+	  *err_msg = "invalid method used";
+	  goto err;
 	}
     }
 
+  return 0;
+
  err:
   return -1;
+}
+
+static int
+load_common_options(mperio_data_t *data, int option_index, options_t *options)
+{
+  if(IS_OPT(options, OPT_SPACING))
+    {
+      SET_UINT_CWORD(data->words, option_index, SPACING, options->spacing);
+      option_index++;
+    }
+  if(IS_OPT(options, OPT_TIMEOUT))
+    {
+      SET_UINT_CWORD(data->words, option_index, TIMEOUT, options->timeout);
+      option_index++;
+    }
+  if(IS_OPT(options, OPT_TTL))
+    {
+      SET_UINT_CWORD(data->words, option_index, TTL, options->ttl);
+      option_index++;
+    }
+  if(IS_OPT(options, OPT_TOS))
+    {
+      SET_UINT_CWORD(data->words, option_index, TOS, options->tos);
+      option_index++;
+    }
+  if(IS_OPT(options, OPT_REPLY_CNT))
+    {
+      SET_UINT_CWORD(data->words, option_index, REPLY_CNT, options->reply_cnt);
+      option_index++;
+    }
+  if(IS_OPT(options, OPT_SRC_ADDR))
+    {
+      SET_ADDRESS_CWORD(data->words, option_index, SRC, options->src_addr);
+      option_index++;
+    }
+
+  return option_index;
 }
 
 
 static VALUE
 mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
 {
-  mperio_data_t *data = NULL;
-
   /* the unvalidated ruby args */
   VALUE vreqnum, vdest, voptions;
 
-  /* VALUE vreqnum, vdest, vspacing, vrr, vtsps;
-  uint16_t rr;
-  uint32_t reqnum, spacing;
-  int rtspsc = 0;
-  VALUE *rtsps = NULL;
-  char *tspsaddr = NULL; */
-
   /* the validated, parsed args */
   options_t options;
+  const char *err_msg = NULL;
   uint32_t reqnum;
   const char *dest;
 
+  mperio_data_t *data = NULL;
   const char *msg = NULL;
   size_t msg_len = 0;
   int i;
@@ -1018,78 +1144,76 @@ mperio_ping_icmp(int argc, VALUE *argv, VALUE self)
   Data_Get_Struct(self, mperio_data_t, data);
   rb_scan_args(argc, argv, "2*", &vreqnum, &vdest, &voptions);
 
-  if(process_options(voptions, MPERIO_PING_METHOD_ICMP, &options) != 0)
+  if(process_options(voptions, MPERIO_PING_METHOD_ICMP, &options, &err_msg) != 0)
     {
-      /* how do we send an error message? */
-      scamper_debug(__func__, "options parsing failed");
-      return self; /* is this right? */
+      /* raise argument exception */
+      rb_raise(rb_eArgError, "invalid or illegal argument -- %s", err_msg);
+      return self;
     }
 
-#if 0
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
-  spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
-  if (spacing > 2147483647) { spacing = 2147483647; }
 
-  rr = (NIL_P(vrr) ? 0 : (uint16_t)NUM2UINT(vrr));
+  /* we have all the options parsed and ready, now build the control message */
 
-  if(!NIL_P(vtsps) && rb_type(vtsps) == T_ARRAY)
-    {
-      rtsps = RARRAY_PTR(RARRAY(vtsps));
-      rtspsc = RARRAY_LEN(RARRAY(vtsps));
-    }
-
+  /* load the non-optional options */
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
 
-  if (spacing > 0) 
+  /* load the common options */
+  opt_cnt = load_common_options(data, opt_cnt, &options);
+
+  /* icmp specific options */
+  if((options.flags & OPT_ICMP_RR) != 0)
     {
-      SET_UINT_CWORD(data->words, opt_cnt, SPACING, spacing);
+      SET_UINT_CWORD(data->words, opt_cnt, RR, options.icmp_rr);
       opt_cnt++;
     }
 
-  if(rr > 0)
+  if((options.flags & OPT_ICMP_TSPS) != 0)
     {
-      SET_UINT_CWORD(data->words, opt_cnt, RR, rr);
-      opt_cnt++;
-    }
-
-  for(i=0;i<rtspsc;i++)
-    {
-      if(rb_type(rtsps[i]) == T_STRING)
+      for(i=0;i<options.icmp_tspsc;i++)
 	{
-	  StringValue(rtsps[i]);
-	  tspsaddr = RSTRING_PTR(rtsps[i]);
 	  switch (i) 
 	    {
 	    case 0:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP1, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP1, 
+				options.icmp_tsps[i]);
 	      opt_cnt++;
 	      break;
-
+	      
 	    case 1:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP2, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP2, 
+				options.icmp_tsps[i]);
 	      opt_cnt++;
 	      break;
 	      
 	    case 2:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP3, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP3, 
+				options.icmp_tsps[i]);
 	      opt_cnt++;
 	      break;
 
 	    case 3:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP4, tspsaddr);
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP4, 
+				options.icmp_tsps[i]);
 	      opt_cnt++;
 	      break;
 	    }
 	}
     }
 
+  if((options.flags & OPT_ICMP_CKSUM) != 0)
+    {
+      SET_UINT_CWORD(data->words, opt_cnt, CKSUM, options.icmp_cksum);
+      opt_cnt++;
+    }
+
   msg = create_control_message(data->words, CMESSAGE_LEN(opt_cnt-1),
 			       &msg_len);
-#endif
+
   assert(msg_len != 0);
   send_command(data, msg);
   return self;
@@ -1100,20 +1224,15 @@ static VALUE
 mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
 {
   mperio_data_t *data = NULL;
-  VALUE vreqnum, vdest, vhop, vcksum, vspacing, vtsps;
+  VALUE vreqnum, vdest, vhop, vcksum, vspacing;
   uint32_t reqnum, hop, cksum, spacing;
-  int rtspsc = 0;
-  VALUE *rtsps = NULL;
-  char *tspsaddr = NULL;
   const char *dest;
   const char *msg = NULL;
   size_t msg_len = 0;
-  int i;
-  int opt_cnt = 5; /* the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
-  rb_scan_args(argc, argv, "42", 
-	       &vreqnum, &vdest, &vhop, &vcksum, &vspacing, &vtsps);
+  rb_scan_args(argc, argv, "41", 
+	       &vreqnum, &vdest, &vhop, &vcksum, &vspacing);
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
@@ -1123,12 +1242,6 @@ mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
   spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
   if (spacing > 2147483647) { spacing = 2147483647; }
 
-  if(!NIL_P(vtsps) && rb_type(vtsps) == T_ARRAY)
-    {
-      rtsps = RARRAY_PTR(RARRAY(vtsps));
-      rtspsc = RARRAY_LEN(RARRAY(vtsps));
-    }
-
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "icmp-echo");
@@ -1136,42 +1249,10 @@ mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
   SET_UINT_CWORD(data->words, 4, CKSUM, cksum);
   if (spacing > 0)
     {
-      SET_UINT_CWORD(data->words, opt_cnt, SPACING, spacing);
-      opt_cnt++;
+      SET_UINT_CWORD(data->words, 5, SPACING, spacing);
     }
 
-  for(i=0;i<rtspsc;i++)
-    {
-      if(rb_type(rtsps[i]) == T_STRING)
-	{
-	  StringValue(rtsps[i]);
-	  tspsaddr = RSTRING_PTR(rtsps[i]);
-	  switch (i) 
-	    {
-	    case 0:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP1, tspsaddr);
-	      opt_cnt++;
-	      break;
-
-	    case 1:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP2, tspsaddr);
-	      opt_cnt++;
-	      break;
-	      
-	    case 2:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP3, tspsaddr);
-	      opt_cnt++;
-	      break;
-
-	    case 3:
-	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP4, tspsaddr);
-	      opt_cnt++;
-	      break;
-	    }
-	}
-    }
-
-  msg = create_control_message(data->words, CMESSAGE_LEN(opt_cnt-1),
+  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 5 : 4),
 			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
@@ -1182,30 +1263,52 @@ mperio_ping_icmp_indir(int argc, VALUE *argv, VALUE self)
 static VALUE
 mperio_ping_tcp(int argc, VALUE *argv, VALUE self)
 {
-  mperio_data_t *data = NULL;
-  VALUE vreqnum, vdest, vdport, vspacing;
-  uint32_t reqnum, dport, spacing;
+  /* the unvalidated ruby args */
+  VALUE vreqnum, vdest, voptions;
+
+  /* the validated, parsed args */
+  options_t options;
+  const char *err_msg = NULL;
+  uint32_t reqnum;
   const char *dest;
+
+  mperio_data_t *data = NULL;
   const char *msg = NULL;
   size_t msg_len = 0;
+  int opt_cnt = 3; /* the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
-  rb_scan_args(argc, argv, "31", &vreqnum, &vdest, &vdport, &vspacing);
+  rb_scan_args(argc, argv, "2*", &vreqnum, &vdest, &voptions);
+
+  if(process_options(voptions, MPERIO_PING_METHOD_TCP, &options, &err_msg) != 0)
+    {
+      /* raise argument exception */
+      rb_raise(rb_eArgError, "invalid or illegal argument -- %s", err_msg);
+      return self;
+    }
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
-  dport = (uint32_t)NUM2ULONG(vdport);
-  spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
-  if (spacing > 2147483647) { spacing = 2147483647; }
 
+  /* we have all the options parsed and ready, now build the control message */
+
+  /* load the non-optional options */
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "tcp-ack");
-  SET_UINT_CWORD(data->words, 3, DPORT, dport);
-  if (spacing > 0) SET_UINT_CWORD(data->words, 4, SPACING, spacing);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 4 : 3),
+  /* load the common options */
+  opt_cnt = load_common_options(data, opt_cnt, &options);
+
+  /* tcp specific options */
+  if((options.flags & OPT_TCP_DPORT) != 0)
+    {
+      SET_UINT_CWORD(data->words, opt_cnt, DPORT, options.tcp_dport);
+      opt_cnt++;
+    }
+  
+  msg = create_control_message(data->words, CMESSAGE_LEN(opt_cnt - 1),
 			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
@@ -1216,28 +1319,52 @@ mperio_ping_tcp(int argc, VALUE *argv, VALUE self)
 static VALUE
 mperio_ping_udp(int argc, VALUE *argv, VALUE self)
 {
-  mperio_data_t *data = NULL;
-  VALUE vreqnum, vdest, vspacing;
-  uint32_t reqnum, spacing;
+  /* the unvalidated ruby args */
+  VALUE vreqnum, vdest, voptions;
+
+  /* the validated, parsed args */
+  options_t options;
+  const char *err_msg = NULL;
+  uint32_t reqnum;
   const char *dest;
+
+  mperio_data_t *data = NULL;
   const char *msg = NULL;
   size_t msg_len = 0;
+  int opt_cnt = 3; /*the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
-  rb_scan_args(argc, argv, "21", &vreqnum, &vdest, &vspacing);
+  rb_scan_args(argc, argv, "2*", &vreqnum, &vdest, &voptions);
+
+  if(process_options(voptions, MPERIO_PING_METHOD_UDP, &options, &err_msg) != 0)
+    {
+      /* raise argument exception */
+      rb_raise(rb_eArgError, "invalid or illegal argument -- %s", err_msg);
+      return self;
+    }
 
   reqnum = (uint32_t)NUM2ULONG(vreqnum);
   StringValue(vdest);
   dest = RSTRING_PTR(vdest);
-  spacing = (NIL_P(vspacing) ? 0 : (uint32_t)NUM2UINT(vspacing));
-  if (spacing > 2147483647) { spacing = 2147483647; }
 
+  /* we have all the options parsed and ready, now build the control message */
+
+  /* load the non-optional options */
   INIT_CMESSAGE(data->words, reqnum, PING);
   SET_ADDRESS_CWORD(data->words, 1, DEST, dest);
   SET_SYMBOL_CWORD(data->words, 2, METH, "udp");
-  if (spacing > 0) SET_UINT_CWORD(data->words, 3, SPACING, spacing);
 
-  msg = create_control_message(data->words, CMESSAGE_LEN(spacing > 0 ? 3 : 2),
+  /* load the common options */
+  opt_cnt = load_common_options(data, opt_cnt, &options);
+
+  /* udp specific options */
+  if((options.flags & OPT_UDP_DPORT) != 0)
+    {
+      SET_UINT_CWORD(data->words, opt_cnt, DPORT, options.udp_dport);
+      opt_cnt++;
+    }
+
+  msg = create_control_message(data->words, CMESSAGE_LEN(opt_cnt - 1),
 			       &msg_len);
   assert(msg_len != 0);
   send_command(data, msg);
@@ -1511,8 +1638,7 @@ Init_mperio(void)
 
   SYM_INTERN(spacing);
   SYM_INTERN(timeout);
-  SYM_INTERN(probe_ttl);
-  SYM_INTERN(max_ttl);
+  SYM_INTERN(ttl);
   SYM_INTERN(tos);
   SYM_INTERN(reply_cnt);
   SYM_INTERN(src_addr);
