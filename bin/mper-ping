@@ -57,9 +57,39 @@ opts.on("--udp", TrueClass, "probe with UDP") do |v|
   $options.probing_method = :udp
 end
 
+opts.on("--checksum", "=NUM", Integer,
+        "specifies the ICMP checksum to use when sending a probe.  The " \
+        "payload of each probe will be manipulated so that the checksum is " \
+        "valid.") do |v|
+  $options.cksum = v
+end
+
 opts.on("--ttl", "=NUM", Integer,
         "TTL for at which the packet should expire (default: unset)") do |v|
   $options.ttl = v
+end
+
+opts.on("--timeout", "=NUM", Integer,
+        "the amount of time in ms to wait for a reply from the remote host"
+        ) do |v|
+  $options.timeout = v
+end
+
+opts.on("--tos", "=NUM", Integer,
+        "specifies the value for the IP Type-of-service field for outgoing "\
+        "probes.") do |v|
+  $options.tos = v
+end
+
+opts.on("--reply-count", "=NUM", Integer,
+        "specifies the number of replies required at which time probing" \
+        "may cease.  By default, all probes are sent.") do |v|
+  $options.reply_cnt = v
+end
+
+opts.on("--src", "=ADDR", String,
+        "specifies the source address to use in probes.") do |v|
+  $options.src_addr = v
 end
 
 opts.on("--rr", TrueClass, 
@@ -224,12 +254,7 @@ class Prober
     @targets = targets
     @target_id = TargetID.new
 
-    if $options.ttl
-      $options.probing_method = :icmp_indir
-      @technique = "icmp-indir"
-    else
-      @technique = $options.probing_method.to_s + "-dir"
-    end
+    @technique = $options.probing_method.to_s + "-dir"
     @active_count = 0
     @reached_concurrency = false
   end
@@ -252,22 +277,24 @@ class Prober
     if target
       printf "probing %s @ %d\n", target, @target_id.id if $options.verbose
       case $options.probing_method
-      when :icmp_indir
-        @mperio.ping_icmp_indir @target_id.advance, target, $options.ttl,
-        0, $options.spacing, $options.rr, $options.tsps
       when :icmp
         @mperio.ping_icmp @target_id.advance, target, 
-        :spacing, $options.spacing, :rr, $options.rr, :tsps, $options.tsps,
-        :timeout, 12, :probe_ttl, 2, :max_ttl, 244, :tos, 0x7f, :reply_cnt, 1,
-        :src_addr, "192.168.0.1", :cksum, 0xffff
-
+        :spacing,  $options.spacing, :timeout, $options.timeout,
+        :ttl, $options.ttl, :tos, $options.tos,
+        :reply_cnt, $options.reply_cnt, :src_addr, $options.src_addr,
+        :rr, $options.rr, :tsps, $options.tsps, :cksum, $options.cksum
       when :tcp
-        @mperio.ping_tcp @target_id.advance, target, ($options.dport || 80),
-          $options.spacing
-
+         @mperio.ping_tcp @target_id.advance, target, 
+        :spacing,  $options.spacing, :timeout, $options.timeout,
+        :ttl, $options.ttl, :tos, $options.tos,
+        :reply_cnt, $options.reply_cnt, :src_addr, $options.src_addr,
+        :dport, ($options.dport || 80)
       when :udp
-        # nil dport => let mper choose a dport
-        @mperio.ping_udp @target_id.advance, target, $options.spacing
+        @mperio.ping_udp @target_id.advance, target, 
+        :spacing,  $options.spacing, :timeout, $options.timeout,
+        :ttl, $options.ttl, :tos, $options.tos,
+        :reply_cnt, $options.reply_cnt, :src_addr, $options.src_addr,
+         :dport, $options.dport
 
       else fail "INTERNAL ERROR: invalid probing method"
       end
