@@ -57,11 +57,11 @@ opts.on("--udp", TrueClass, "probe with UDP") do |v|
   $options.probing_method = :udp
 end
 
-opts.on("--checksum", "=NUM", Integer,
+opts.on("--checksum", "=HEX", String,
         "specifies the ICMP checksum to use when sending a probe.  The " \
         "payload of each probe will be manipulated so that the checksum is " \
         "valid.") do |v|
-  $options.cksum = v
+  $options.cksum = v.hex
 end
 
 opts.on("--ttl", "=NUM", Integer,
@@ -75,10 +75,10 @@ opts.on("--timeout", "=NUM", Integer,
   $options.timeout = v
 end
 
-opts.on("--tos", "=NUM", Integer,
+opts.on("--tos", "=HEX", String,
         "specifies the value for the IP Type-of-service field for outgoing "\
         "probes.") do |v|
-  $options.tos = v
+  $options.tos = v.hex
 end
 
 opts.on("--reply-count", "=NUM", Integer,
@@ -203,19 +203,19 @@ class ProgressOutput
     icmp_code = (result.reply_icmp_code || "-").to_s
     tcp_flags = (result.reply_tcp_flags || "-").to_s
     tsps1 = result.reply_tsps_ip1 ? 
-      sprintf("%s:%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
+      sprintf("%s=%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
       "-"
     tsps1 = result.reply_tsps_ip1 ? 
-      sprintf("%s:%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
+      sprintf("%s=%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
       "-"
     tsps2 = result.reply_tsps_ip2 ? 
-      sprintf("%s:%d", result.reply_tsps_ip2, result.reply_tsps_ts2) : 
+      sprintf("%s=%d", result.reply_tsps_ip2, result.reply_tsps_ts2) : 
       "-"
     tsps3 = result.reply_tsps_ip3 ? 
-      sprintf("%s:%d", result.reply_tsps_ip3, result.reply_tsps_ts3) : 
+      sprintf("%s=%d", result.reply_tsps_ip3, result.reply_tsps_ts3) : 
       "-"
     tsps4 = result.reply_tsps_ip4 ? 
-      sprintf("%s:%d", result.reply_tsps_ip4, result.reply_tsps_ts4) : 
+      sprintf("%s=%d", result.reply_tsps_ip4, result.reply_tsps_ts4) : 
       "-"
     rr = result.reply_rr || "-"
 
