@@ -569,7 +569,7 @@ end
 
 class TspsDealiasTask
 
-  attr_reader :taskid, :last_reply
+  attr_reader :taskid
 
   def initialize(taskid, candidates, results)
     @ipa = candidates[0]
@@ -577,7 +577,6 @@ class TspsDealiasTask
     @taskid = taskid
     @candidates = candidates
     @results = results
-    @last_reply = Time.at(0)
 
     log("#{@ipa},#{@ipb}: dealiasing starting");
 
@@ -611,7 +610,6 @@ class TspsDealiasTask
   end
 
   def receive_probe(probe)
-    @last_reply = Time.now
     current_state().receive_probe(probe)
   end
 
