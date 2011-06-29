@@ -401,7 +401,8 @@ class TspsDealiasManager
     #  printf "probing (%s|%s) @ %d\n", probe.dest, tsps_ips_s, probe.id 
     # end
     @pending_probes[probe.id] = probe
-    @mperio.ping_icmp probe.id, probe.dest, $options.spacing, nil, probe.tsps_ips
+    @mperio.ping_icmp probe.id, probe.dest, 
+      :spacing, $options.spacing, :tsps, probe.tsps_ips
   end
   
   ####
