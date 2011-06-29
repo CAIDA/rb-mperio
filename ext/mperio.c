@@ -152,13 +152,15 @@ typedef struct {
 
 #define tcp_dport  options_method_un.om_tcp.dport
 
+/*
 #define MPER_OPT_DEFAULT_SPACING    0
 #define MPER_OPT_DEFAULT_TIMEOUT    5000
 #define MPER_OPT_DEFAULT_TTL        255
 #define MPER_OPT_DEFAULT_TOS        0x0
-#define MPER_OPT_DEFAULT_REPLY_CNT  0 /* send all probes */
+#define MPER_OPT_DEFAULT_REPLY_CNT  0
 #define MPER_OPT_DEFAULT_ICMP_RR    0
 #define MPER_OPT_DEFAULT_ICMP_CKSUM 0
+*/
 
 #define OPT_SPACING    0x00000001
 #define OPT_TIMEOUT    0x00000002
@@ -182,11 +184,11 @@ typedef struct {
 #define MPERIO_PING_METHOD_UDP   1
 #define MPERIO_PING_METHOD_TCP   2
 
-#define CHECK_PARSE_INT(out, type, opt, def) ((rb_type(opt) == T_FIXNUM ||	\
+#define CHECK_PARSE_INT(out, type, opt) ((rb_type(opt) == T_FIXNUM ||	\
 					   NIL_P(opt)) &&		\
-					      ((out = PARSE_INT(type,opt,def)\
+					      ((out = PARSE_INT(type,opt)\
 						) || 1))
-#define PARSE_INT(type, opt, def) (NIL_P(opt) ? def : (type)NUM2UINT(opt))
+#define PARSE_INT(type, opt) (NIL_P(opt) ? 0 : (type)NUM2UINT(opt))
 
 
 #define CHECK_PARSE_STR(out, opt) ((rb_type(opt) == T_STRING) && \
@@ -901,12 +903,18 @@ static int process_options(VALUE options, int probe_method,
 	}
       opt_type = SYM2ID(opts[i]);
       opt = opts[i+1];
+
+      /* check if we have explicitly been passed a nil value */
+      if(NIL_P(opt))
+	{
+	  /* don't set this option */
+	  continue;
+	}
       
       /* common options */
       if(opt_type == sym_spacing)
 	{
-	  if(!CHECK_PARSE_INT(options_out->spacing, uint32_t, opt, 
-			      MPER_OPT_DEFAULT_SPACING) ||
+	  if(!CHECK_PARSE_INT(options_out->spacing, uint32_t, opt) ||
 	     options_out->spacing < 0 || options_out->spacing > UINT32_MAX)
 	    {
 	      *err_msg = "spacing must be between 0 and 2^32";
@@ -916,8 +924,7 @@ static int process_options(VALUE options, int probe_method,
 	}
       else if(opt_type == sym_timeout)
 	{
-	  if(!CHECK_PARSE_INT(options_out->timeout, uint32_t, opt, 
-			      MPER_OPT_DEFAULT_TIMEOUT) ||
+	  if(!CHECK_PARSE_INT(options_out->timeout, uint32_t, opt) ||
 	     options_out->timeout < 0 || options_out->timeout > UINT32_MAX)
 	    {
 	      *err_msg = "timeout must be between 0 and 2^32";
@@ -927,8 +934,7 @@ static int process_options(VALUE options, int probe_method,
 	}
       else if(opt_type == sym_ttl)
 	{
-	  if(!CHECK_PARSE_INT(options_out->ttl, uint16_t, opt,
-			      MPER_OPT_DEFAULT_TTL) ||
+	  if(!CHECK_PARSE_INT(options_out->ttl, uint16_t, opt) ||
 	     options_out->ttl < 1 || options_out->ttl > 255)
 	    {
 	      *err_msg = "ttl must be between 1 and 255";
@@ -938,8 +944,7 @@ static int process_options(VALUE options, int probe_method,
 	}
       else if(opt_type == sym_tos)
 	{
-	  if(!CHECK_PARSE_INT(options_out->tos, uint16_t, opt,
-			      MPER_OPT_DEFAULT_TOS) ||
+	  if(!CHECK_PARSE_INT(options_out->tos, uint16_t, opt) ||
 	     options_out->tos > 255)
 	    {
 	      *err_msg = "tos must be between 0 and 255";
@@ -949,8 +954,7 @@ static int process_options(VALUE options, int probe_method,
 	}
       else if(opt_type == sym_reply_cnt)
 	{
-	  if(!CHECK_PARSE_INT(options_out->reply_cnt, uint16_t, opt,
-			      MPER_OPT_DEFAULT_REPLY_CNT))
+	  if(!CHECK_PARSE_INT(options_out->reply_cnt, uint16_t, opt))
 	    {
 	      *err_msg = "reply cnt must be between 0 and 2^16";
 	      goto err;
@@ -959,15 +963,12 @@ static int process_options(VALUE options, int probe_method,
 	}
       else if(opt_type == sym_src_addr)
 	{
-	  if(!NIL_P(opt))
+	  if(!CHECK_PARSE_STR(options_out->src_addr, opt))
 	    {
-	      if(!CHECK_PARSE_STR(options_out->src_addr, opt))
-		{
-		  *err_msg = "src_addr must be an address string";
-		  goto err;
-		}
-	      SET_OPT_FLAG(options_out, OPT_SRC_ADDR);
+	      *err_msg = "src_addr must be an address string";
+	      goto err;
 	    }
+	  SET_OPT_FLAG(options_out, OPT_SRC_ADDR);
 	}
 
       /* icmp options */
@@ -975,8 +976,7 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_rr)
 	    {
-	      if(!CHECK_PARSE_INT(options_out->icmp_rr, int, opt,
-				  MPER_OPT_DEFAULT_ICMP_RR) ||
+	      if(!CHECK_PARSE_INT(options_out->icmp_rr, int, opt) ||
 		 (options_out->icmp_rr != 0 && options_out->icmp_rr != 1))
 		{
 		  *err_msg = "icmp_rr must be 0 (off) or 1 (on)";
@@ -986,7 +986,7 @@ static int process_options(VALUE options, int probe_method,
 	    }
 	  else if(opt_type == sym_tsps)
 	    {
-	      if(!NIL_P(opt) && rb_type(opt) == T_ARRAY)
+	      if(rb_type(opt) == T_ARRAY)
 		{
 		  rtsps = RARRAY_PTR(opt);
 		  options_out->icmp_tspsc = RARRAY_LEN(opt);
@@ -1008,16 +1008,12 @@ static int process_options(VALUE options, int probe_method,
 	    }
 	  else if(opt_type == sym_cksum)
 	    {
-	      if(!NIL_P(opt))
+	      if(!CHECK_PARSE_INT(options_out->icmp_cksum, uint16_t, opt))
 		{
-		  if(!CHECK_PARSE_INT(options_out->icmp_cksum, uint16_t, opt,
-				      MPER_OPT_DEFAULT_ICMP_CKSUM))
-		    {
-		      *err_msg = "checksum must be between 0 and 2^16";
-		      goto err;
-		    }
-		  SET_OPT_FLAG(options_out, OPT_ICMP_CKSUM);
+		  *err_msg = "checksum must be between 0 and 2^16";
+		  goto err;
 		}
+	      SET_OPT_FLAG(options_out, OPT_ICMP_CKSUM);
 	    }
 	  else
 	    {
@@ -1031,16 +1027,12 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_dport)
 	    {
-	      if(!NIL_P(opt))
+	      if(!CHECK_PARSE_INT(options_out->udp_dport, uint16_t, opt))
 		{
-		  if(!CHECK_PARSE_INT(options_out->udp_dport, uint16_t, opt,
-				      -1))
-		    {
-		      *err_msg = "udp_dport must be between 0 and 2^16";
-		      goto err;
-		    }
-		  SET_OPT_FLAG(options_out, OPT_UDP_DPORT);
+		  *err_msg = "udp_dport must be between 0 and 2^16";
+		  goto err;
 		}
+	      SET_OPT_FLAG(options_out, OPT_UDP_DPORT);
 	    }
 	  else
 	    {
@@ -1054,16 +1046,12 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_dport)
 	    {
-	      if(!NIL_P(opt))
+	      if(!CHECK_PARSE_INT(options_out->tcp_dport, uint16_t, opt))
 		{
-		  if(!CHECK_PARSE_INT(options_out->tcp_dport, uint16_t, opt,
-				      -1))
-		    {
-		      *err_msg = "tcp_dport must be between 0 and 2^16";
-		      goto err;
-		    }
-		  SET_OPT_FLAG(options_out, OPT_TCP_DPORT);
+		  *err_msg = "tcp_dport must be between 0 and 2^16";
+		  goto err;
 		}
+	      SET_OPT_FLAG(options_out, OPT_TCP_DPORT);
 	    }
 	  else
 	    {
