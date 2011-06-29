@@ -30,17 +30,15 @@ $options.confidence = nil
 $options.dport = nil
 $options.firsthop = 1
 $options.gaplimit = 5
-$options.gapaction = 1
+$options.gapaction = :stop
 $options.maxttl = 255
 $options.loops = 1
 $options.loopaction = 0
-$options.method = :icmp
+$options.probe_method = :icmp
 $options.attempts = 2
 $options.all_allocated = false
 $options.not_time_exceeded = false
 $options.spacing = 0
-
-REPEAT = 5
 
 opts = OptionParser.new
 
@@ -52,9 +50,9 @@ opts.on("-p", "--mper-port=NUM", Integer,
   $options.mper_port = v
 end
 
-opts.on("-c", "--candidates=PATH",
-        "file with candidate address information") do |v|
-  $options.candidate_path = v
+opts.on("-c", "--targets=PATH",
+        "file with target address information") do |v|
+  $options.target_path = v
 end
 
 opts.on("-n", "--concurrency=NUM", Integer,
@@ -74,41 +72,47 @@ opts.on("-l", "--log=PATH", "mper command/result message log path") do |v|
   $options.log_path = v
 end
 
-opts.on("-c", "--confidence=NUM",
+opts.on("-c", "--confidence=NUM", Integer,
         "specifies that a hop should be probed to a specified confidence "\
         "level (95% or 99%) to be sure the trace has seen all interfaces "\
         "that will reply for that hop.") do |v|
   $options.confidence = v
 end
 
-opts.on("-d", "--dport=NUM",
+opts.on("-d", "--dport=NUM", Integer,
         "specifies the base destination port value to use for UDP-based " \
         "and TCP-based traceroute methods. For ICMP-based methods, this " \
         "option has no effect.") do |v|
   $options.dport = v
 end
 
-opts.on("-f", "--firsthop=NUM",
+opts.on("-f", "--firsthop=NUM", Integer, 
         "specifies the TTL or HLIM value to begin probing with (default: 1)"
         ) do |v|
   $options.firsthop = v
 end
 
-opts.on("-g", "--gaplimit=NUM",
+opts.on("-g", "--gaplimit=NUM", Integer, 
         "specifies the number of unresponsive hops permitted until a check " \
         "is made to see if the destination will respond. Zero is unlimited " \
         "(default: 5)") do |v|
   $options.gaplimit = v
 end
 
-opts.on("-G", "--gapaction=NUM",
+opts.on("-G", "--gapaction=[stop|lastditch]", String,
         "specifies what should happen if the gaplimit condition is met.  A " \
         "value of 1 (default) means halt probing, while a value of 2 means " \
         "send last-ditch probes.") do |v|
-  $options.gapaction = v
+  if v == "stop"
+    $options.gapaction = :stop
+  elsif v == "lastditch"
+    $options.gapaction = :lastditch
+  else
+    raise OptionParser::ParseError
+  end
 end
 
-opts.on("-m", "--maxttl=NUM",
+opts.on("-m", "--maxttl=NUM", Integer, 
         "specifies the maximum TTL or HLIM value that will be probed.  By "\
         "default, there is no restriction, apart from the 255 hops that "\
         "the Internet protocols allow.") do |v|
@@ -117,14 +121,14 @@ end
 
 #no PMTUD as it is not supported by MperIO
 
-opts.on("-l", "--loops=NUM",
+opts.on("-l", "--loops=NUM", Integer,
         "specifies the maximum number of loops permitted until probing "\
         "stops.  By default, a value of one is used.  A value of zero "\
         "disables loop checking.") do |v|
   $options.loops = v
 end
 
-opts.on("-L", "--loopaction=NUM",
+opts.on("-L", "--loopaction=NUM", Integer,
         "specifies the action to take when a loop is encountered.  A value "\
         "of 1 tells scamper to probe beyond the first loop in the trace."
         ) do |v|
@@ -135,20 +139,20 @@ end
 
 opts.on("-i", "--icmp", TrueClass,
         "probe with ICMP echo request (paris depends on mper) (default)") do |v|
-  $options.method = :icmp
+  $options.probe_method = :icmp
 end
 
 opts.on("-u", "--udp", TrueClass,
         "probe with UDP (paris depends on mper)") do |v|
-  $options.method = :udp
+  $options.probe_method = :udp
 end
 
 opts.on("-t", "--tcp", TrueClass,
         "probe with TCP ACK") do |v|
-  $options.method = :tcp
+  $options.probe_method = :tcp
 end
 
-opts.on("-a", "--attempts=NUM", 
+opts.on("-a", "--attempts=NUM", Integer,
          "specifies the maximum number of attempts to obtain a response " \
          "per hop (default: 2)") do |v|
   $options.attempts = v
@@ -162,11 +166,20 @@ end
 
 # no sport as it is not supported by MperIO
 
-# no src addr as it is not supported by MperIO
+opts.on("-S", "--src-addr=ADDR", String,
+        "specifies the source address to use in probes.  The address "\
+        "cannot be spoofed.") do |v|
+  $options.src_addr = v
+end
 
 # no tos as it is not supported by MperIO (note, we stole -t for --tcp)
+opts.on("-z" "--tos=HEX", String,
+        "specifies the value to set in the IP ToS/DSCP + ECN byte.  By "\
+        "default, this byte is set to zero.") do |v|
+  $options.tos = v.hex
+end
 
-opts.on("-T", "--not-time-exceeded",
+opts.on("-T", "--not-time-exceeded", TrueClass,
         "specifies that time exceeded messages from the destination do not "\
         "cause the trace to be defined as reaching the destination.") do |v|
   $options.not_time_exceeded = v
@@ -174,7 +187,11 @@ end
 
 # userid is not supported by MperIO
 
-# wait (timeout) is not supported by MperIO
+opts.on("-w", "--timeout=NUM", Integer,
+        "specifies how long to wait, in seconds, for a reply.  By default, "\
+        "a value of 5 is used.") do |v|
+  $options.timeout = v
+end
 
 opts.on("-W", "--wait-probe=NUM", Integer,
         "specifies the minimum time to wait, in 10s of milliseconds, "\
@@ -206,8 +223,8 @@ unless $options.mper_port
   exit -1
 end
 
-unless $options.candidate_path || ARGV.length >= 1
-  $stderr.puts "ERROR: candidate file path "\
+unless $options.target_path || ARGV.length >= 1
+  $stderr.puts "ERROR: target file path "\
     "or at least one address must be specified\n\n"
   $stderr.puts opts
   exit -1
@@ -215,44 +232,44 @@ end
 
 #============================================================================
 
-class CandidateFile
+class TargetFile
 
-  attr_reader :current_candidate
+  attr_reader :current_target
 
-  def initialize(candidate_path)
-    @candidate_path = candidate_path
-    @candidate_io = File.open candidate_path
+  def initialize(target_path)
+    @target_path = target_path
+    @target_io = File.open target_path
     @done = false
     advance
   end
 
   def advance
     if @done
-      @current_candidate = nil
+      @current_target = nil
     else
       loop do
-        line = @candidate_io.gets
+        line = @target_io.gets
         if line
           next if line =~ /^\#/ || line =~ /^\s*$/
           line.chomp!
-          @current_candidate = line
+          @current_target = line
           break
         else
           @done = true
-          @current_candidate = nil
+          @current_target = nil
           break
         end
       end
     end
-    return @current_candidate
+    return @current_target
   end
 
 end
 
-class ImmediateCandidates
+class ImmediateTargets
 
-  def initialize(candidates)
-    @candidates = candidates
+  def initialize(targets)
+    @targets = targets
     advance
   end
   
@@ -260,17 +277,17 @@ class ImmediateCandidates
     if ip =~ /^\d+\.\d+\.\d+\.\d+$/
       ip
     else
-      $stderr.puts "ERROR: malformed candidate ip: \"#{ip}\""
+      $stderr.puts "ERROR: malformed target ip: \"#{ip}\""
       advance
     end
   end
   
-  def current_candidate
-    @current_candidate
+  def current_target
+    @current_target
   end
   
   def advance
-    @current_candidate = @candidates.shift
+    @current_target = @targets.shift
   end
 end
 
@@ -278,15 +295,16 @@ end
 #============================================================================
 
 class Probe
-  attr_accessor :id, :task, :dest, :ttl, :result
+  attr_accessor :id, :task, :dest, :ttl, :attempt, :result
   
-  def initialize(dest, ttl)
+  def initialize(dest, ttl, attempt)
     self.dest = dest
     self.ttl = ttl
+    self.attempt = attempt #internal id for the task to use
   end
 
   def to_s
-    "Probe #{id}: #{dest}[#{ttl})"
+    "Probe #{id}: #{dest} TTL: #{ttl}"
   end
     
 end
@@ -304,10 +322,10 @@ class TraceManager
     @next_probe_id = 1
     
     # initialize the list of addresses to probe
-    if $options.candidate_path
-      @candidates = CandidateFile.new $options.candidate_path
+    if $options.target_path
+      @targets = TargetFile.new $options.target_path
     else
-      @candidates = ImmediateCandidates.new ARGV
+      @targets = ImmediateTargets.new ARGV
     end
     
     # initialize the mper connection
@@ -343,7 +361,7 @@ class TraceManager
   end
   
   ####
-  # used by the TspsDealiasTask objects to queue a probe that they want sent
+  # used by the TraceTask objects to queue a probe that they want sent
   #
   def queue_probe(task, probe)
     probe.id = get_next_probe_id()
@@ -353,14 +371,27 @@ class TraceManager
     # end
     @pending_probes[probe.id] = probe
 
-    case $options.method
+    case $options.probe_method
       when :icmp
-      @mperio.ping_icmp_indir(probe.id, probe.dest, probe.ttl, nil, 
-                              $options.spacing, nil)
+      @mperio.ping_icmp(probe.id, probe.dest, :ttl, probe.ttl,
+                        :src_addr, $options.src_addr,
+                        :tos, $options.tos,
+                        :timeout, $options.timeout,
+                        :spacing, $options.spacing)
       when :udp
+      @mperio.ping_udp(probe.id, probe.dest, :ttl, probe.ttl,
+                        :src_addr, $options.src_addr,
+                        :tos, $options.tos,
+                        :timeout, $options.timeout,
+                        :spacing, $options.spacing)
 
-      when :tcp
-
+    when :tcp
+      @mperio.ping_tcp(probe.id, probe.dest, :ttl, probe.ttl,
+                       :src_addr, $options.src_addr,
+                       :tos, $options.tos,
+                       :timeout, $options.timeout,
+                       :spacing, $options.spacing)
+      
       else fail "INTERNAL ERROR: invalid probing method"
     end
   end
@@ -373,15 +404,14 @@ class TraceManager
   end
   
   def fill_task_queue
-    while (candidates = @candidates.current_candidate) != nil
+    while (target = @targets.current_target) != nil
       if $options.concurrency && @pending_tasks.length >= $options.concurrency
         @reached_concurrency = true
         break
       end
-      results = $options.suitability_results ? @candidates.current_result : nil
-      task = TspsDealiasTask.new(get_next_task_id(), candidates, results)
+      task = TraceTask.new(get_next_task_id(), target)
       @pending_tasks.push task
-      @candidates.advance
+      @targets.advance
     end
   end
   
@@ -489,195 +519,129 @@ class TraceManager
 
 end
 
-class DealiasResult
+class TraceResult
   
-  attr_reader :ipa, :ipb
-  attr_accessor :suit_check, :alias_validity_check, :ret_path, :alias_check
-  attr_accessor :shared_clk, :distance_loop, :overall
-  attr_accessor :verbose
+  attr_reader :target
+  attr_accessor :hops, :stop_reason
   
-  def initialize(ipa, ipb)
-    @ipa = ipa
-    @ipb = ipb
-    @suit_check = []
-    @alias_validity_check = []
-    @ret_path = "-"
-    @alias_check = "-"
-    @shared_clk = "-"
-    @distance_loop = "-"
-    @verbose = []
+  def initialize(target)
+    @target = target
+    @hops = [] # hash of hops TTL => hop
+    allocate_hop($options.firsthop)
   end
-  
-  def to_s
-    dump_verbose() if $options.verbose
-    @alias_validity_check[0] = "-" unless @alias_validity_check[0]
-    @alias_validity_check[1] = "-" unless @alias_validity_check[1]
-    result = sprintf("%s,%s|%s,%s|%s,%s|%s|%s|%s|%s|%s", 
-                     @ipa, @ipb, @suit_check[0], @suit_check[1],
-                     @alias_validity_check[0], @alias_validity_check[1],
-                     @ret_path, @alias_check, @shared_clk, @distance_loop,
-                     @overall)
-  end  
 
-  def dump_verbose
-    @verbose.each do |line|
-      puts line
-    end
+  def allocate_hop(ttl)
+    hop = Hop.new(ttl)
+    @hops << hop
+    return hop
   end
+
+  def hop_at_ttl(ttl)
+    return @hops[ttl-1]
+  end
+
+  def to_s
+    str = "traceroute to #{@target}\n"
+    @hops.each do |hop|
+      str += hop.to_s
+    end
+    str += "stop reason: #{@stop_reason}\n"
+  end  
 
 end
 
-class TspsDealiasTask
+class Hop
 
-  attr_reader :taskid, :last_reply
+  attr_accessor :ttl, :results, :responsive
 
-  def initialize(taskid, candidates, results)
-    @ipa = candidates[0]
-    @ipb = candidates[1]
-    @taskid = taskid
-    @candidates = candidates
-    @results = results
-    @last_reply = Time.at(0)
-
-    log("#{@ipa},#{@ipb}: dealiasing starting");
-
-    @dealias_result = DealiasResult.new(@ipa, @ipb)
-    @is_complete = false
-
-    if @results
-      @dealias_result.suit_check = @results
-      @current_state = TspsDealiasAliasCheckTask.new(@candidates, 
-                                                     @dealias_result)
-    else
-      @current_state = TspsDealiasSuitabilityTask.new(candidates, 
-                                                      @dealias_result)
-    end
+  def initialize(ttl)
+    @ttl = ttl
+    @results = []
+    @responsive = true
   end
 
   def to_s
-    "Task: IPA:#{@ipa} IPB:#{@ipb} State:#{@current_state}"
-  end
-
-  def current_state
-    return nil unless @current_state
-    if @current_state.is_complete
-      @current_state = @current_state.next_state
-    end
-    return @current_state
-  end
-
-  def next_probe
-    current_state().next_probe
-  end
-
-  def receive_probe(probe)
-    @last_reply = Time.now
-    current_state().receive_probe(probe)
-  end
-
-  def is_complete
-    if current_state() == nil
-      log("#{@ipa},#{@ipb}: dealiasing complete");
-      puts @dealias_result
-      true
-    else
-      false
-    end
-  end
-
-end #TspsDealiasTask
-
-class TspsDealiasSuitabilityTask
-
-  attr_reader :is_complete
-
-  def initialize(candidates, dealias_result)
-    @dealias_result = dealias_result
-    @candidates = candidates
-
-    @subtask = TspsDealiasSuitabilityIpTask.new(@candidates[0], 
-                                                @dealias_result)
-    @state = :ipa
-    # states: :ipa, :ipb, :done
-  end
-
-  def next_state
-    if @passed && @candidates[1]
-      return TspsDealiasAliasCheckTask.new(@candidates, @dealias_result)
-    else
-      return nil
-    end
-  end
-
-  def is_complete
-    if @subtask.is_complete
-      if @state == :ipa 
-        @suit_a_passed = @subtask.passed
-        if @candidates[1]
-          @state = :ipb
-          @subtask = TspsDealiasSuitabilityIpTask.new(@candidates[1],
-                                                      @dealias_result)
-          return false
-        end
+    str = @ttl.to_s
+    @results.each do |result|
+      if result.responded?
+        str += sprintf("\t%s\t\%s ms\n", result.reply_src, rtt(result))
+      else
+        str += sprintf("\t*\n")
       end
-      if @state == :ipb
-        @suit_b_passed = @subtask.passed
-      end
-      @state = :done
-      if !@dealias_result.overall
-        @dealias_result.overall = "INELIGIBLE"
-      end
-      @passed = @candidates[1] ? @suit_a_passed && @suit_b_passed : 
-        @suit_a_passed
-      return true
-    else
-      return false
     end
+    return str
   end
 
-  def next_probe
-    return @subtask.next_probe
+  def rtt(result)
+    return "-" if !result.responded?
+    tx = Time.at(result.tx_sec, result.tx_usec)
+    rx = Time.at(result.rx_sec, result.rx_usec)
+    (rx-tx) * 1000
   end
+  
+end
 
-  def receive_probe(probe)
-    @subtask.receive_probe(probe)
-  end
+class TraceTask
 
-end #TspsDealiasSuitabilityTask
+  attr_reader :taskid, :is_complete
 
-class TspsDealiasSuitabilityIpTask
+  def initialize(taskid, target)
+    @taskid = taskid
+    @target = target
 
-  X = "192.0.2.0"
+    log("#{@target}: trace starting");
 
-  attr_reader :passed
+    @trace_result = TraceResult.new(@target)
+    @is_complete = false
 
-  def initialize(ip, dealias_result)
-    @ip = ip
-    @dealias_result = dealias_result
+    @ttl        = $options.firsthop
 
-    @state = :extra_stamp
-    
+    @attempt    = 0
+    @n          = 2 # used for confidence, assume two initially
+    @loopc      = 0
+    @iloopc     = 0
+
     @replies = []
-    
     @probe_queue = []
     @pending_probes = 0
-    # states: :extra_stamp, :double_stamp, :done
+    
+    @interfaces = []
 
-    @message = "#{ip}: suitability check"
-    @err_message = @message + " failed "
-    log(@message)
+    # i think that for the moment we can do all of the probing from this
+    # one task.
+    # reintroduce later if we need sub-tasks
+    # @current_state = TspsDealiasSuitabilityTask.new(target, 
+    #                                               @dealias_result)
+  end
+  
+  def add_interface(interface)
+    @interfaces << interface unless @interfaces.contains(interface)
+    @n += 1
+  end
+  
+  def to_s
+    "Task: #{@taskid} To: #{@target} TTL: #{@ttl}"
   end
 
+  #def current_state
+  #  return nil unless @current_state
+  #  if @current_state.is_complete
+  #    @current_state = @current_state.next_state
+  #  end
+  #  return @current_state
+  #end
+
+  # note to self, methods are called in this order:
+  # is_complete ? nil : next_probe
+  # so next_probe is only called if is_complete returns false
+  # is_complete is ALWAYS called before next_probe
+
   def next_probe
+    #current_state().next_probe
+    # what is our next probe?
     if @probe_queue.length == 0 && @pending_probes == 0
-      # get the probes
-      if @state == :extra_stamp
-        log("#{@ip}: \textra stamp bug check (A|AXXX)")
-        @probe_queue = repeat_add(@ip, [@ip, X, X, X])
-      elsif @state == :double_stamp
-        log("#{@ip}: \tdouble stamp check (A|AAAA)")
-        @probe_queue = repeat_add(@ip, [@ip, @ip, @ip, @ip])
-      end
+      @attempt += 1
+      @probe_queue << Probe.new(@target, @ttl, @attempt)
     end
     probe = @probe_queue.shift
     @pending_probes += 1 if probe
@@ -685,1024 +649,395 @@ class TspsDealiasSuitabilityIpTask
   end
 
   def receive_probe(probe)
+    #current_state().receive_probe(probe)
+    # receive the probe!
     unless probe
       return
     end
-    @replies << probe
+
     @pending_probes -= 1
 
-    if @replies.length == REPEAT
-      process_reply_probes(@replies)
-      @replies = []
-    end
-  end
-
-  def process_reply_probes(replies)
-    stamp_types = classify_stamps(@replies)
-    if @state == :extra_stamp
-      if @ip == @dealias_result.ipa
-        dump_replies(@dealias_result, "A|AXXX", replies)
-      else
-        dump_replies(@dealias_result, "B|BXXX", replies)
-      end
-
-      # we must have at least two replys
-      if stamp_types[:reply_cnt] < 2
-        # we do not have enough replies to have confidence
-        log(@err_message + 
-            "(#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
-        @dealias_result.suit_check << "FNR#{stamp_types[:reply_cnt]}"
-        
-        #lets tell them to reprobe if we receive only one reply
-        if stamp_types[:reply_cnt] == 1
-          @dealias_result.overall = "UNKNOWN-REPROBE"
-        end
-        
-        @state = :done
-      elsif stamp_types.keys.length > 3 #(no_reply, reply_cnt, x_stamps)
-        # more than one stamping behavior is seen
-        log(@err_message + "(more than one stamping behavior)")
-        @dealias_result.suit_check << "FVS#{stamp_types[:reply_cnt]}"
-        
-        @state = :done
-      elsif stamp_types[:two_stamps] > 0
-        log(@err_message + "(extra stamp)")
-        @dealias_result.suit_check << "FES#{stamp_types[:reply_cnt]}"
-        
-        @state = :done
-      elsif stamp_types[:no_stamp] > 0
-        log(@err_message + "(no stamp)")
-        @dealias_result.suit_check << "FNS#{stamp_types[:reply_cnt]}"
-        
-        @state = :done
-      end
-      if @state != :done
-        @state = :double_stamp
-      end
-    elsif @state == :double_stamp
-      if @ip == @dealias_result.ipa
-        dump_replies(@dealias_result, "A|AAAA", replies)
-      else
-        dump_replies(@dealias_result, "B|BBBB", replies)
-      end
-
-      if stamp_types[:reply_cnt] < 2
-        # we do not have enough replies to have confidence
-        log(@err_message + 
-            "(#{stamp_types[:no_reply]}/#{REPEAT} probes received no reply)")
-        @dealias_result.suit_check << "FNR#{stamp_types[:reply_cnt]}"
-        # tell them to reprobe because we saw replies to (A|AXXX)
-        @dealias_result.overall = "UNKNOWN-REPROBE"
-        
-      elsif stamp_types.keys.length > 3 #(no_reply, reply_cnt, x_stamps)
-        # more than one stamping behavior is seen
-        log(@err_message + "(more than one stamping behavior)")
-        @dealias_result.suit_check << "FVS#{stamp_types[:reply_cnt]}"
-        
-      elsif stamp_types[:no_stamp] > 0
-        log(@err_message + "(no stamp)")
-        @dealias_result.suit_check << "FNS#{stamp_types[:reply_cnt]}"
-        
-      elsif stamp_types[:one_stamp] > 0
-        log(@err_message + "(one stamp)")
-        @dealias_result.suit_check << "F1S#{stamp_types[:reply_cnt]}"
-        
-      elsif stamp_types[:four_stamps] > 0
-        log(@message + " passed (4 stamps)")
-        @dealias_result.suit_check << "P4S#{stamp_types[:reply_cnt]}"
-        @passed = true
-        
-      elsif stamp_types[:three_stamps] > 0
-        log(@message + " passed (3 stamps)")
-        @dealias_result.suit_check << "P3S#{stamp_types[:reply_cnt]}"
-        @passed = true
-        
-        elsif stamp_types[:two_stamps] > 0
-        log(@message + " passed (2 stamps)")
-        @dealias_result.suit_check << "P2S#{stamp_types[:reply_cnt]}"
-
-        @passed = true
-      else
-        # huh? how could we have possibly got here?
-        log(@message + "FATAL ERROR: invalid state")
-        @dealias_result.suit_check << "XXX"
-        @dealias_result.overall = "ERROR"
-        
-      end
-      @state = :done
-    end
-  end
-  
-  def is_complete
-    if @state == :done
-      true
+    if !probe.result.responded?
+      receive_timeout_probe(probe)
+    elsif probe.result.icmp_reply?
+      receive_icmp_probe(probe)
+    elsif probe.result.tcp_reply?
+      receive_tcp_probe(probe)
     else
-      false
+      $stderr.puts "FATAL ERROR: unknown reply type"
     end
   end
 
-end #TspsDealiasSuitabilityIpTask
+  def receive_icmp_probe(probe)
+    result = probe.result
+    hop = @trace_result.hop_at_ttl(result.probe_ttl)
 
-class TspsDealiasAliasCheckTask
+    unless hop
+      $stderr.puts "FATAL ERROR: no hop record for #{result.probe_ttl}"
+      exit -1
+    end
 
-  attr_reader :is_complete
+    hop.results << result
 
-  def initialize(candidates, dealias_result)
-    @dealias_result = dealias_result
-    @candidates = candidates
-    @ipa = @candidates[0]
-    @ipb = @candidates[1]
+    # to make the port from scamper easier, we assume that we're not
+    # going to probe any more as the default position of this method
+    @is_complete = true
 
-    @probe_queue = []
-    @pending_probes = 0
+    # if this reply is not for the current ttl (i.e. a late reply),
+    # check if we can stop now
+    if(result.probe_ttl != @ttl)
+      reason = stop_reason(@trace_result, result)
+      if(reason != :stop_none)
+        @trace_result.stop_reason = reason
+        return
+      end
+    end
 
-    @replies = []
+    ##
+    # the rest of the code in this function deals with the fact this is a
+    # reply for the current working hop.
+    #
+    # check if we are to send all allotted probes to the target
+    ##
+    if($options.all_allocated)
+      if($options.confidence)
+        $stderr.puts "FATAL ERROR: confidence and all_allocated cannot be "\
+          "used simulaneously"
+      end
+      
+      ##
+      # if we get an out of order reply, then we go back to waiting for
+      # the one we just probed for
+      ##
+      if(probe.attempt != @attempt)
+        @is_complete = false
+        return
+      end
 
-    @stamps_a = {} # the stamps for (A|ABAB)
-    @stamps_b = {} # the stamps for (B|BABA)
+      ##
+      # this response is for the last probe sent.  if there are still
+      # probes to send for this hop, then send the next one
+      ##
+      if(@attempt < $options.attempts)
+        @is_complete = false
+        return
+      end
 
-    @state = :probe_ipa
-    # states: :probe_ipa, :probe_ipb, :ret_path_check
+    elsif($options.confidence)
+      ##
+      # record details of the interface, if its details are not
+      # currently held
+      ##
+      add_interface(result.reply_src)
 
-    @message = "#{@ipa},#{@ipb}: dealias check"
-    @err_message = @message + " failed "
-    log(@message)
+      if(@n <= CONFIDENCE_MAX_N)
+        ##
+        # if we get an out of order reply, then we go back to waiting for
+        # the one we just probed for
+        ##
+        if(probe.attempt != @attempt)
+          @is_complete = false
+          return
+        end
+
+        ##
+        # this response is for the last probe sent.  if there are still
+        # probes to send for this hop, then send the next one
+        ##
+        if(@attempt < k(@n))
+          @is_complete = false
+          return
+        end
+
+        ##
+        # if we get to here, the confidence for this hop is done,
+        # reset the state we keep about that stuff
+        ##
+        @n = 2
+        @interfaces = []
+      end
+
+      @attempt = 1
+    end
+
+    ##
+    # if we're in a mode where we only care about the first response to
+    # a probe, then check it now.  the else block below handles the case
+    # where we want a larger number of responses from a hop.
+    ##
+    if(!$options.confidence && !$options.all_allocated)
+      #check to see if we have a stop reason from the ICMP response
+      reason = stop_reason(@trace_result, result)
+      if(reason != :stop_none)
+        @trace_result.stop_reason = reason
+        return
+      end
+    else
+      # check all hop records for a reason to halt the trace
+      @trace_result.hops.each do |hop|
+        hop.results.each do |tr|
+          reason = stop_reason(@trace_result, tr)
+          if(reason != :stop_none)
+            @trace_result.stop_reason = reason
+            return
+          end
+        end
+      end
+    end
+    
+    # check if we've reached the hoplimit
+    if(@trace_result.hops.length == 255 || 
+       @trace_result.hops.length == $options.hoplimit)
+      @trace_result.stop_reason = :stop_hoplimit
+      return
+    end
+
+    #move on to the next ttl
+
+    @attempt = 0
+    @ttl += 1
+    @trace_result.allocate_hop(@ttl)
+    
+    @is_complete = false
+    return
+    
   end
 
-  def next_state
-    return nil
-    #if @passed
-    #  return TspsDealiasAliasCheckTask.new(@candidates, @dealias_result)
+  def receive_tcp_probe(probe)
+    result = probe.result
+    hop = @trace_result.hop_at_ttl(result.probe_ttl)
+
+    unless hop
+      $stderr.puts "FATAL ERROR: no hop record for #{result.probe_ttl}"
+      exit -1
+    end
+
+    hop.results << result
+
+    # to make the port from scamper easier, we assume that we're not
+    # going to probe any more as the default position of this method
+    @is_complete = true
+
+    # if we are sending all allotted probes to the target
+    if($options.all_attempts)
+      if(probe.attempts != @attempt)
+        @is_complete = false
+        return
+      end
+    elsif($options.confidence)
+      # record details of the interface
+      add_interface(result.reply_src)
+
+      if(@n <= CONFIDENCE_MAX_N && @attempt < k(@n))
+        @is_completed = false
+        return
+      end
+    end
+
+    @trace_reason = :stop_completed
+    return
+  end
+
+  def receive_timeout_probe(probe)
+    result = probe.result
+
+    hop = @trace_result.hop_at_ttl(result.probe_ttl)
+
+    unless hop
+      $stderr.puts "FATAL ERROR: no hop record for #{result.probe_ttl}"
+      exit -1
+    end
+
+    hop.results << result
+
+    if(@attempt == $options.attempts)
+      @is_complete = true
+      hop.responsive = false
+      # all probes for this hop have now been sent
+
+      # scamper does a check to see if any of the other responses can be
+      # used for a stop reason. this shouldnt apply for us, but let's do
+      # it anyway.
+      @trace_result.hops.each do |hop|
+        hop.results.each do |tr|
+          reason = stop_reason(@trace_result, tr)
+          if(reason != :stop_none)
+            @trace_result.stop_reason = reason
+            return
+          end
+        end
+      end
+      
+      # check if we've reached the hoplimit
+      if(@trace_result.hops.length == 255 || 
+         @trace_result.hops.length == $options.hoplimit)
+        @trace_result.stop_reason = :stop_hoplimit
+        return
+      end
+
+      # see if a non-response for this hop brings us to the gap limit
+      if(@trace_result.hops.length >= $options.gaplimit)
+        # start at the current ttl -1 and go back gaplimit -1 hops
+        # check if all of these hops are unresponsive
+        deadpath = true
+        (@ttl-1).downto(@ttl-($options.gaplimit-1)) do |i|
+          hop = @trace_result.hop_at_ttl(i)
+          if hop && hop.responsive
+            deadpath = false
+            break
+          end
+        end
+
+        # add lastditch mode stuff in here
+        if deadpath
+          @trace_result.stop_reason = :gaplimit
+          return
+        end
+
+      end
+
+      @attempt = 0
+      @ttl += 1
+      @trace_result.allocate_hop(@ttl)
+      @is_complete = false
+    end
+    
+  end
+
+  def is_complete
+    puts @trace_result if @is_complete
+    return @is_complete
+    #if current_state() == nil
+    #  log("#{@ipa},#{@ipb}: dealiasing complete");
+    #  puts @dealias_result
+    #  true   
     #else
-    #  return nil
+    #  false
     #end
   end
 
-  def is_complete
-    if @state == :probe_ipa || @state == :probe_ipb
-        return false
-    end
-    if @state == :done
-      return true
-    end
-    if @state == :ret_path_check
-      return @subtask.is_complete
-    end
-    if @state == :shared_clock
-      if @subtask.is_complete
-        if @subtask.passed
-          @subtask = TspsDealiasDistanceLoopTask.new((@probes_a | @probes_b), 
-                                                     @ipa, @ipb,
-                                                     @dealias_result)
-          @state = :distance_loop
-        else
-          return true
-        end
-      end
-      return false
-    end
-    if @state == :distance_loop
-      return @subtask.is_complete
-    end
-  end
-
-  def next_probe
-    if @state == :probe_ipa || @state == :probe_ipb
-      if @probe_queue.length == 0 && @pending_probes == 0
-        # get the probes
-        if @state == :probe_ipa
-          log("#{@ipa}: \tdealias check (A|ABAB)")
-          @probe_queue = repeat_add(@ipa, [@ipa, @ipb, @ipa, @ipb])
-        elsif @state == :probe_ipb
-          log("#{@ipb}: \tdealias check (B|BABA)")
-          @probe_queue = repeat_add(@ipb, [@ipb, @ipa, @ipb, @ipa])
-        end
-      end
-      probe = @probe_queue.shift
-      @pending_probes += 1 if probe
-      return probe
-    else
-      return @subtask.next_probe
-    end
-  end
-
-  def receive_probe(probe)
-    if @state == :probe_ipa || @state == :probe_ipb
-      unless probe
-        return
-      end
-      @replies << probe
-      @pending_probes -= 1
-      
-      if @replies.length == REPEAT
-        process_reply_probes(@replies)
-        @replies = []
-        if @state == :check_validity
-          a_valid = check_validity(@probes_a, @stamps_a, @ipa, 
-                                   @dealias_result.suit_check[0])
-          b_valid = check_validity(@probes_b, @stamps_b, @ipb, 
-                                   @dealias_result.suit_check[1])
-
-          if !a_valid || !b_valid
-            if @dealias_result.alias_validity_check[0] == "F1S" &&
-                @dealias_result.alias_validity_check[1] == "P2S"
-              @subtask = TspsDealiasRetPathCheckTask.new(@ipa, @ipb, 
-                                                         @dealias_result)
-              @state = :ret_path_check
-              return
-            elsif @dealias_result.alias_validity_check[0] == "P2S" &&
-                @dealias_result.alias_validity_check[1] == "F1S"
-              @subtask = TspsDealiasRetPathCheckTask.new(@ipb, @ipa, 
-                                                         @dealias_result)
-              @state = :ret_path_check
-              return
-              #return ret_path_check(ipb, ipa)
-            else
-              @state = :done
-              return
-            end
-          else
-            stamp_types = classify_stamps(@probes_a | @probes_b)
-
-            passed_cnt = stamp_types[:two_stamps] + stamp_types[:three_stamps] +
-              stamp_types[:four_stamps]
-            
-            # be sure that we have a total of REPEAT stamps (50%) 
-            # to base the analysis on
-            if passed_cnt < REPEAT
-              log(@err_message + 
-                  "(#{passed_cnt} of #{REPEAT}" +
-                  " required probes with >=2 stamps)")
-              @dealias_result.alias_check = "FIR"
-              @dealias_result.overall = "UNKNOWN-REPROBE"
-              @state = :done
-              return
-            end
-            
-            # these need to be split because we have to be sure that BOTH a and b
-            # have replied with four stamps
-            if @stamps_a[:four_stamps] > 0 && @stamps_b[:four_stamps] > 0
-              log(@message + " passed (4 stamps)")
-              @dealias_result.alias_check = "P4S"
-              @dealias_result.overall = "ALIAS"
-              @state = :done
-              return
-            elsif (@stamps_a[:two_stamps] > 0 && 
-                   @stamps_b[:four_stamps] > 0) ||
-                (@stamps_a[:four_stamps] && 
-                 @stamps_b[:two_stamps] > 0)
-              log(@message + " passed (2 stamps)")
-              @dealias_result.alias_check = "P2S"
-              @state = :shared_clock
-              @subtask = TspsDealiasSharedClockTask.new((@probes_a | @probes_b),
-                                                        @ipa, @ipb, 
-                                                        @dealias_result)
-              return
-            elsif stamp_types[:three_stamps] > 0
-              log(@err_message + "(three stamps received)")
-              @dealias_result.alias_check = "F3S"
-              @dealias_result.overall = "ERROR"
-              @state = :done
-              return
-            end
-          end
-        end
-      end
-    else
-      @subtask.receive_probe(probe)
-    end
-  end
-
-  def process_reply_probes(replies)
-    stamp_types = classify_stamps(@replies)
-    if @state == :probe_ipa
-      dump_replies(@dealias_result, "A|ABAB", replies)
-      @probes_a = @replies
-      @stamps_a = stamp_types
-      @state = :probe_ipb
-    else
-      dump_replies(@dealias_result, "B|BABA", replies)
-      @probes_b = @replies
-      @stamps_b = stamp_types
-      @state = :check_validity
-    end
-  end
-
-  def check_validity(probes, stamp_types, ip, suitresult)
-    message = "#{ip}: \tvalidity check"
-    err_message = message + " failed "
-    log(message)
-
-    if stamp_types[:reply_cnt] == 0
-      log(err_message + "(no replies)")
-      @dealias_result.alias_validity_check << "FNR"
-      @dealias_result.overall = "UNKNOWN-REPROBE" unless @dealias_result.overall
-      return false
-    end
-
-    if stamp_types.keys.length > 3
-      log(err_message + "(multiple stamping behvaiors seen)")
-      @dealias_result.alias_validity_check << "FVS"
-      @dealias_result.overall = "INELIGIBLE" unless @dealias_result.overall
-      return false
-    end
-
-    if suitresult =~ /P4S/ || suitresult =~ /P2S/
-      if suitresult =~ /P4S/ && stamp_types[:two_stamps] > 0
-        dec_cnt = 0
-        var_cnt = 0
-        probes.each do |probe|
-          result = probe.result
-          unless result.responded? && result.reply_tsps_ts1 && 
-              result.reply_tsps_ts2 
-            next
-          end
-          if (result.reply_tsps_ts1 > result.reply_tsps_ts2)
-            dec_cnt +=1
-          end
-          if (result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
-            var_cnt += 1
-          end
-        end
-        # went from a 4stamp to a 2stamp
-        # if ts1-ts2 > 0 || ts2-ts1 > 1 more than once
-        if dec_cnt > 1
-          log(err_message + "(4->2 stamps w. ts decrease STRONG)")
-          @dealias_result.alias_validity_check << "FRD"
-          @dealias_result.overall = "NOALIAS-STRONG"
-        elsif var_cnt > 1
-          log(err_message + "(4->2 stamps w. ts gap WEAK)")
-          @dealias_result.alias_validity_check << "FRG"
-          @dealias_result.overall = "NOALIAS-WEAK"
-        else
-          log(err_message + "(4->2 stamps w. inconclusive ts UNKNOWN)")
-          @dealias_result.alias_validity_check << "FRU"
-          @dealias_result.overall = "UNKNOWN-NOALIAS"
-        end
-        return false
-      elsif (suitresult =~ /P4S/ && stamp_types[:three_stamps] > 0) ||
-          (suitresult =~ /P2S/ && stamp_types[:three_stamps] > 0)
-        dec_cnt = 0
-        var_cnt = 0
-        probes.each do |probe|
-          result = probe.result
-          unless result.responded? && result.reply_tsps_ts1 && 
-              result.reply_tsps_ts2 && result.reply_tsps_ts3
-            next
-          end
-          if (result.reply_tsps_ts1 > result.reply_tsps_ts2 &&
-              result.reply_tsps_ts2 < result.reply_tsps_ts3)
-            dec_cnt += 1
-          end
-          if (result.reply_tsps_ts3 - result.reply_tsps_ts3 > 1 &&
-               result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
-            var_cnt += 1
-          end
-        end
-        # went from a 4stamp to a 3stamp
-        # if (ts1-ts2 > 0 && ts2-ts3 < 0) || (ts3-ts2 > 1 && ts2-ts1 >1) once
-        if dec_cnt >= 1
-          log(err_message + "(4|2->3 stamps w. ts decrease STRONG)")
-          @dealias_result.alias_validity_check << "FRS"
-          @dealias_result.overall = "NOALIAS-STRONG"
-        elsif var_cnt >= 1
-          log(err_message + "(4|2->3 stamps w. ts gap WEAK)")
-          @dealias_result.alias_validity_check << "FRW"
-          @dealias_result.overall = "NOALIAS-WEAK"
-        else
-          log(err_message + "(4|2->3 stamps w. inconclusive ts UNKNOWN)")
-          @dealias_result.alias_validity_check << "FRU"
-          @dealias_result.overall = "UNKNOWN-NOALIAS"
-        end
-        return false
-      end
-    end
-    
-    if stamp_types[:no_stamp] > 0
-      log(err_message + "(no stamps)")
-      @dealias_result.alias_validity_check << "FNS"
-      @dealias_result.overall = "ERROR"
-      return false
-    end
-
-    if stamp_types[:one_stamp] > 0 
-      log(err_message + "(one stamp)")
-      @dealias_result.alias_validity_check << "F1S"
-      @dealias_result.overall = "UNKNOWN" unless @dealias_result.overall
-      return false
-    end
-
-    if stamp_types[:two_stamps] > 0
-      log(message + " passed (two stamps)")
-      @dealias_result.alias_validity_check << "P2S"
-      return true
-    end
-
-    if stamp_types[:three_stamps] > 0
-      #leave this as a pass for the moment
-      #it'll soon get weeded out
-      log(message + " passed (three stamps)")
-      @dealias_result.alias_validity_check << "P3S"
-      return false
-    end
-
-    if stamp_types[:four_stamps] > 0
-      log(message + " passed (four stamps)")
-      @dealias_result.alias_validity_check << "P4S"
-      return true
-    end
-
-    @dealias_result.alias_validity_check << "XXX"
-    @dealias_result.overall = "ERROR"
-  end
-
-
-end #TspsDealiasAliasCheckTask
-
-
-class TspsDealiasRetPathCheckTask
-
-  attr_reader :is_complete
-
-  def initialize(ipa, ipb, dealias_result)
-    @dealias_result = dealias_result
-    @ipa = ipa
-    @ipb = ipb
-
-    @probe_queue = []
-    @pending_probes = 0
-
-    @replies = []
-
-    @state = :probe
-    # states: :probe, :done
-
-    @message = "#{@ipa},#{@ipb}: return path check"
-    @err_message = @message + " completed "
-    log(@message)
-  end
-
-  def is_complete
-    if @state == :probe
-        return false
-    end
-    if @state == :done
-      return true
-    end
-  end
-
-  def next_probe
-    if @probe_queue.length == 0 && @pending_probes == 0
-      # get the probes
-      log("#{@ipa},#{@ipb}: " +
-          "\tchecking for #{@ipa} in the path to #{@ipb} (A|BABA)")
-      @probe_queue = repeat_add(@ipb, [@ipa, @ipb, @ipa, @ipb])
-    end
-    probe = @probe_queue.shift
-    @pending_probes += 1 if probe
-    return probe
-  end
-
-  def receive_probe(probe)
-    unless probe
-      return
-    end
-    @replies << probe
-    @pending_probes -= 1
-    
-    if @replies.length == REPEAT
-      process_reply_probes(@replies)
-      @replies = []
-    end
-  end
-  
-  def process_reply_probes(probes)
-    if @ipa == @dealias_result.ipa
-      dump_replies(@dealias_result, "B|ABAB", probes)
-    else
-      dump_replies(@dealias_result, "A|BABA", probes)
-    end
-    stamp_types = classify_stamps(probes)
-    
-    if stamp_types[:reply_cnt] == 0
-      log(@err_message + "(no reply)")
-      @dealias_result.ret_path = "FNR"
-      @dealias_result.overall = "UNKNOWN-REPROBE"
-    end
-    
-    if stamp_types.keys.length > 3
-      log(!err_message + "(multiple stamping behvaiors seen)")
-      @dealias_result.ret_path = "FVS"
-      @dealias_result.overall = "INELIGIBLE"
-    end
-    
-    if stamp_types[:no_stamp] > 0
-      log(@err_message + "(no stamps)")
-      @dealias_result.ret_path = "FNS"
-      @dealias_result.overall = "UNKNOWN-NOALIAS"
-    end
-
-    if stamp_types[:one_stamp] > 0 
-      log(@err_message + "(one stamp)")
-      @dealias_result.ret_path = "F1S"
-      @dealias_result.overall = "ERROR"
-    end
-
-    if stamp_types[:two_stamps] > 0
-      # if find 2 or more probes which exhibit:
-      # ts1 > ts2
-      # $$ strong non-alias
-      # else
-      # if ts2-ts1 > 1 
-      # $$ weak non-alias
-      # else
-      # $$ unknown-noalias
-      dec_cnt = 0
-      var_cnt = 0
-      probes.each do |probe|
-        result = probe.result
-        unless result.responded? && result.reply_tsps_ts1 && 
-            result.reply_tsps_ts2
-          next
-        end
-        if (result.reply_tsps_ts1 > result.reply_tsps_ts2)
-          dec_cnt +=1
-        end
-        if (result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
-          var_cnt += 1
-        end
-      end
-      if dec_cnt > 1
-        log(@err_message + "(2 stamps w. ts decrease STRONG)")
-        @dealias_result.ret_path = "F2D"
-        @dealias_result.overall = "NOALIAS-STRONG"
-      elsif var_cnt > 1
-        log(@err_message + "(2 stamps w. ts gap WEAK)")
-        @dealias_result.ret_path = "F2G"
-        @dealias_result.overall = "NOALIAS-WEAK"
-      else
-        log(@err_message + "(2 stamps w. inconclusive ts UNKNOWN)")
-        @dealias_result.ret_path = "F2U"
-        @dealias_result.overall = "UNKNOWN-NOALIAS"
-      end
-    end
-
-    if stamp_types[:three_stamps] > 0
-      # find a probe which exhibits:
-      # ts2 < ts1 && ts1 <= ts3
-      # $$ strong non-alias
-      # else if ts3-ts2 > 1 && ts2-ts1 > 1
-      # $$ weak non-alias
-      # else
-      # $$ uknown-nonalias
-      dec_cnt = 0
-      var_cnt = 0
-      probes.each do |probe|
-        result = probe.result
-        unless result.responded? && result.reply_tsps_ts1 && 
-            result.reply_tsps_ts2 && result.reply_tsps_ts3
-          next
-        end
-        if (result.reply_tsps_ts1 > result.reply_tsps_ts2 &&
-            result.reply_tsps_ts2 < result.reply_tsps_ts3)
-          dec_cnt += 1
-        end
-        if (result.reply_tsps_ts3 - result.reply_tsps_ts3 > 1 &&
-            result.reply_tsps_ts2 - result.reply_tsps_ts1 > 1)
-          var_cnt += 1
-        end
-      end
-      if dec_cnt >= 1
-        log(@err_message + "(3 stamps w. ts decrease STRONG)")
-        @dealias_result.ret_path = "F4S"
-        @dealias_result.overall = "NOALIAS-STRONG"
-      elsif var_cnt >= 1
-        log(@err_message + "(3 stamps w. ts gap WEAK)")
-        @dealias_result.ret_path = "F4W"
-        @dealias_result.overall = "NOALIAS-WEAK"
-      else
-        log(@err_message + "(3 stamps w. inconclusive ts UNKNOWN)")
-        @dealias_result.ret_path = "F4U"
-        @dealias_result.overall = "UNKNOWN-NOALIAS"
-      end
-    end
-
-    if stamp_types[:four_stamps] > 0
-      log(@err_message + "(four stamps)")
-      @dealias_result.ret_path = "F4S"
-      @dealias_result.overall = "ERROR"
-    end
-
-    @state = :done
-  end
-
-end #TspsDealiasRetPathCheckTask
-
-class TspsDealiasSharedClockTask
-
-  def initialize(probes, ipa, ipb, dealias_result)
-    @probes = probes
-    @ipa = ipa
-    @ipb = ipb
-    @dealias_result = dealias_result
-
-    @probe_queue = []
-    @pending_probes = 0
-
-    @replies = []
-
-    @state = :done
-    # states: :regular, :midnight_epoch_a, :midnight_epoch_b, :done
-
-    @message = "#{@ipa},#{@ipb}: shared clock check"
-    @err_message = @message + " failed "
-    log(@message)
-
-    process_probes_init
-  end
-
-  def process_probes_init
-    @passed_cnt = 0
-    dec_ts = 0
-    mid_epoch_cnt = 0
-
-    stamp_types = classify_stamps(@probes)
-
-    @probes.each do |task|
-      result = task.result
-      stamp_one_type = nil
-      stamp_two_type = nil
-      max_stamp = nil
-      task_pass = true
-      if result.reply_tsps_ts1
-        max_stamp = result.reply_tsps_ts1
-        stamp_one_type = classify_time_type(result.reply_tsps_ts1)
-      end
-      if result.reply_tsps_ts2
-        stamp_two_type = classify_time_type(result.reply_tsps_ts2)
-        if max_stamp > result.reply_tsps_ts2
-          dec_ts += 1
-        elsif max_stamp < result.reply_tsps_ts2
-          max_stamp = result.reply_tsps_ts2
-          task_pass = false
-        end
-      end
-      if result.reply_tsps_ts3
-        if max_stamp > result.reply_tsps_ts3
-          dec_ts += 1
-        elsif max_stamp < result.reply_tsps_ts3
-          max_stamp = result.reply_tsps_ts3
-          task_pass = false
-        end
-      end
-      if result.reply_tsps_ts4
-        if max_stamp > result.reply_tsps_ts4
-          dec_ts += 1
-        elsif max_stamp < result.reply_tsps_ts4
-          max_stamp = result.reply_tsps_ts4
-          task_pass = false
-        end
-      end
-
-      mid_epoch_cnt += 1 if (stamp_one_type == :midnight_offset && 
-        stamp_two_type == :epoch)
-
-      @passed_cnt += 1 if task_pass 
-    end
-
-    # check for decrementing timestamps
-    if dec_ts > 0
-      log(@err_message + "(decrementing timestamp)")
-      @dealias_result.shared_clk = "FDT#{dec_ts}"
-      @dealias_result.overall = dec_ts == 0 ? "UNKNOWN-REPROBE" : 
-        "NOALIAS-STRONG"
-      @state = :done
-      return
-    end
-          
-    if mid_epoch_cnt == stamp_types[:two_stamps]
-      @state = :midnight_epoch_a
-      return
-    end
-
-    finish_probe_check
-
-  end
-
-  def passed
-    return @state == :passed
-  end
-
-  def is_complete
-    if @state == :done || @state == :passed
-      return true
-    end
-    return false
-  end
-
-  def next_probe
-    if @probe_queue.length == 0 && @pending_probes == 0
-      # get the probes
-      if @state == :midnight_epoch_a
-        log("#{@ipa}: \tmidnight/epoch behavior check (A|BBBB)")
-        @probe_queue = repeat_add(@ipa, [@ipb, @ipb, @ipb, @ipb])
-      elsif @state == :midnight_epoch_b
-        log("#{@ipb}: \tmidnight/epoch behavior check (B|AAAA)")
-        @probe_queue = repeat_add(@ipb, [@ipa, @ipa, @ipa, @ipa])
-      end
-    end
-    probe = @probe_queue.shift
-    @pending_probes += 1 if probe
-    return probe
-  end
-
-  def receive_probe(probe)
-    unless probe
-      return
-    end
-    @replies << probe
-    @pending_probes -= 1
-    
-    if @replies.length == REPEAT
-      process_reply_probes(@replies)
-      @replies = []
-    end
-  end
-
-  def process_reply_probes(replies)
-    stamp_types = classify_stamps(replies)
-    if @state == :midnight_epoch_a
-      dump_replies(@dealias_result, "A|BBBB", replies)
-      @ipa_offset = stamp_types[:two_stamps] > 0 && 
-        is_midnight_offset(replies, stamp_types)
-      @state = :midnight_epoch_b
-    elsif @state == :midnight_epoch_b
-      dump_replies(@dealias_result, "B|AAAA", replies)
-      @ipb_offset = stamp_types[:two_stamps] > 0 && 
-        is_midnight_offset(replies, stamp_types)
-      if @ipa_offset && @ipb_offset
-        log(@message + " passed (midnight/epoch behavior)")
-        @dealias_result.shared_clk = "PME"
-        @dealias_result.overall = "ALIAS"
-        @state = :passed
-        return
-      end
-
-      finish_probe_check
-    end
-  end
-
-  def finish_probe_check
-    shared_clk_pct = (@passed_cnt/@probes.length.to_f)*100
-    if shared_clk_pct >= 90
-      log(@message + " passed (#{shared_clk_pct}% shared clocks)")
-      @dealias_result.shared_clk = "PSC"
-      @state = :passed
-      return
-    else
-      log(@err_message + "#{shared_clk_pct}% shared clocks (90% required)")
-      @dealias_result.shared_clk = "F90"
-      @dealias_result.overall = "UNKNOWN-NOALIAS"
-      @state = :done
-      return
-    end
-  end
-
-  def classify_time_type(timestamp)
-    if timestamp > 0 && timestamp < 86400000
-      return :midnight_offset
-    elsif timestamp < 0 || timestamp > 4294967296
-      return :nonstandard
-    elsif timestamp == 0
-      return :zero
-    else
-      return :epoch
-    end
-  end
-
-  def is_midnight_offset(tasks, stamp_types)
-    mid_epoch_cnt = 0
-    tasks.each do |task|
-      stamp_one_type = nil
-      stamp_two_type = nil
-      result = task.result
-      if result.reply_tsps_ts1
-        stamp_one_type = classify_time_type(result.reply_tsps_ts1)
-      end
-
-      if result.reply_tsps_ts2
-        stamp_two_type = classify_time_type(result.reply_tsps_ts2)
-      end
-
-      if stamp_one_type == :midnight_offset && stamp_two_type == :epoch
-        mid_epoch_cnt += 1
-      end
-    end
-
-    if mid_epoch_cnt == stamp_types[:two_stamps]
-      return true
-    else
-      return false
-    end
-  end
-
-
-end #TspsDealiaSharedClockTask
-
-class TspsDealiasDistanceLoopTask
-
-  attr_reader :is_complete
-  
-  def initialize(probes, ipa, ipb, dealias_result)
-    @probes = probes
-    @ipa = ipa
-    @ipb = ipb
-    @dealias_result = dealias_result
-
-    @probe_queue = []
-    @pending_probes = 0
-
-    @replies = []
-
-    @stamps_a = {} # the stamps for (A|ABAB)
-    @stamps_b = {} # the stamps for (B|BABA)
-
-    @state = :probe_ipa
-    # states: :probe_ipa, :probe_ipb, :done
-
-    @message = "#{@ipa},#{@ipb}: distance/loop check"
-    @err_message = @message + " failed "
-    log(@message)
-  end
-
-  def next_state
-    return nil
-  end
-
-  def is_complete
-    return @state == :done
-  end
-
-  def next_probe
-    if @probe_queue.length == 0 && @pending_probes == 0
-      # get the probes
-      if @state == :probe_ipa
-        log("#{@ipa}: \tcheck reverse distance")
-        @probe_queue = repeat_add(@ipa, nil)
-      elsif @state == :probe_ipb
-        log("#{@ipb}: \tcheck reverse distance")
-        @probe_queue = repeat_add(@ipb, nil)
-      end
-    end
-    probe = @probe_queue.shift
-    @pending_probes += 1 if probe
-    return probe
-  end
-
-  def receive_probe(probe)
-    unless probe
-      return
-    end
-    @replies << probe
-    @pending_probes -= 1
-    
-    if @replies.length == REPEAT
-      process_reply_probes(@replies)
-      @replies = []
-    end
-  end
-
-  def process_reply_probes(replies)
-    if @state == :probe_ipa
-      dump_replies(@dealias_result, "A|", replies)
-      @ipa_ttl = get_return_ttl(@ipa, replies)
-      @state = :probe_ipb
-      return
-    else
-      dump_replies(@dealias_result, "B|", replies)
-      @ipb_ttl = get_return_ttl(@ipb, replies)
-      
-      unless @ipa_ttl && @ipb_ttl
-        @dealias_result.overall = "UNKNOWN-REPROBE"
-        @state = :done
-        return
-      end
-
-      if @ipa_ttl != @ipb_ttl
-        log(@err_message + "A(#{@ipa_ttl}) and B(#{@ipb_ttl}) not equidistant")
-        @dealias_result.distance_loop = "FDI"
-        @dealias_result.overall = "UNKNOWN-NOALIAS"
-        @state = :done
-        return
-      end
-
-      log(@message + " passed (A(#{@ipa_ttl}) == B=(#{@ipb_ttl}))")
-      @dealias_result.distance_loop = "PDI"
-      @dealias_result.overall = "ALIAS"
-      @state = :done
-      return
-    end
-  end
-
-  def get_return_ttl(ip, tasks)
-    message = "#{ip}: \testablishing return distance"
-    err_message = message + " failed "
-    log(message)
-
-    ttl = nil
-    noreply = 0
-    tasks.each do |task|
-      if task.result.responded?
-        ttl = task.result.reply_ttl if ttl == nil
-        if task.result.reply_ttl != ttl
-          log(err_message + "reply ttl varies")
-          @dealias_result.distance_loop = "FTV"
-          return nil
-        end
-      else
-        noreply += 1
-      end
-    end
-    
-    if noreply == REPEAT
-      log(err_message + "no reply")
-      @dealias_result.distance_loop = "FNR#{noreply}"
-      return nil
-    end
-
-    return ttl
-  end
-
-end #TspsDealiasDistanceLoopTask
+end #TraceTask
 
 #################################################################################
 # STATIC HELPER METHODS
 #################################################################################
 
-def repeat_add(dest, tsps_ips)
-  queue = []
-  REPEAT.times do 
-    queue << Probe.new(dest, tsps_ips)
-  end
-  return queue
-end
+$k = [
+      [   0,   0 ], [   0,   0 ], [   6,   8 ], [  11,  15 ], [  16,  21 ],
+      [  21,  28 ], [  27,  36 ], [  33,  43 ], [  38,  51 ], [  44,  58 ],
+      [  51,  66 ], [  57,  74 ], [  63,  82 ], [  70,  90 ], [  76,  98 ],
+      [  83, 106 ], [  90, 115 ], [  96, 123 ], [ 103, 132 ], [ 110, 140 ],
+      [ 117, 149 ], [ 124, 157 ], [ 131, 166 ], [ 138, 175 ], [ 145, 183 ],
+      [ 152, 192 ], [ 159, 201 ], [ 167, 210 ], [ 174, 219 ], [ 181, 228 ],
+      [ 189, 237 ], [ 196, 246 ], [ 203, 255 ], [ 211, 264 ], [ 218, 273 ],
+      [ 226, 282 ], [ 233, 291 ], [ 241, 300 ], [ 248, 309 ], [ 256, 319 ],
+      [ 264, 328 ], [ 271, 337 ], [ 279, 347 ], [ 287, 356 ], [ 294, 365 ],
+      [ 302, 375 ], [ 310, 384 ], [ 318, 393 ], [ 326, 403 ], [ 333, 412 ],
+      [ 341, 422 ], [ 349, 431 ], [ 357, 441 ], [ 365, 450 ], [ 373, 460 ],
+      [ 381, 470 ], [ 389, 479 ], [ 397, 489 ], [ 405, 499 ], [ 413, 508 ],
+      [ 421, 518 ], [ 429, 528 ], [ 437, 537 ], [ 445, 547 ], [ 453, 557 ],
+      [ 462, 566 ], [ 470, 576 ], [ 478, 586 ], [ 486, 596 ], [ 494, 606 ],
+      [ 502, 616 ], [ 511, 625 ], [ 519, 635 ], [ 527, 645 ], [ 535, 655 ],
+      [ 544, 665 ], [ 552, 675 ], [ 560, 685 ], [ 569, 695 ], [ 577, 705 ],
+      [ 585, 715 ], [ 594, 725 ], [ 602, 735 ], [ 610, 745 ], [ 619, 755 ],
+      [ 627, 765 ], [ 635, 775 ], [ 644, 785 ], [ 652, 795 ], [ 661, 805 ],
+      [ 669, 815 ], [ 678, 825 ], [ 686, 835 ], [ 695, 845 ], [ 703, 855 ],
+      [ 712, 866 ], [ 720, 876 ], [ 729, 886 ], [ 737, 896 ], [ 746, 906 ],
+    ]
 
-def classify_stamps(probes)
-  stamp_types = Hash.new(0)
-  stamp_types[:no_reply] = 0 #ensure that there is always a key for this
-  probes.each do |probe|
-    stamp_types[count_stamps(probe.result)] += 1
-    stamp_types[:reply_cnt] += 1 if probe.result.responded?
-  end
-  stamp_types
-end
+CONFIDENCE_MAX_N = $k.length
 
-def count_stamps(result)
-  return :no_reply if !result.responded?
-  return :four_stamps if result.reply_tsps_ts4
-  return :three_stamps if result.reply_tsps_ts3
-  return :two_stamps if result.reply_tsps_ts2
-  return :one_stamp if result.reply_tsps_ts1
-  return :no_stamp
+def k(n, confidence)
+  return $k[n][confidence]
 end
 
 def log(message)
   $stderr.puts message if $options.full
 end
 
-def rtt(result)
-  return "-" if !result.responded?
-  tx = Time.at(result.tx_sec, result.tx_usec)
-  rx = Time.at(result.rx_sec, result.rx_usec)
-  (rx-tx) * 1000
+###
+# decide if this result is a good enough reason to stop
+def stop_reason(trace_result, result)
+  
+   ##
+   # the message received is an ICMP port unreachable -- something that
+   # the destination should have sent.  make sure the port unreachable
+   # message makes sense based on the traceroute type.
+   ##
+  
+  if(is_icmp_unreach_port(result) && (is_method(:udp) || is_method(:tcp)))
+    reason = :stop_completed
+  elsif(is_icmp_unreach(result))
+    reason = :stop_unreach
+  elsif(is_icmp_echo_reply(result))
+    ##
+    # the message received is an ICMP echo reply -- something that only
+    # makes sense to include as part of the traceroute if the traceroute
+    # is using echo requests.
+    ##
+    if(is_method(:icmp))
+      reason = :stop_completed
+    else
+      reason = :stop_none
+    end
+  elsif($options.loops != 0 && is_loop(trace_result, result)) 
+    # checked for and found loop condition
+    reason = :stop_loop
+  elsif(is_icmp_ttl_exp(result) && $options.not_time_exceeded == false &&
+        is_target(trace_result, result))
+    ##
+    # if an ICMP TTL expired message is received from an IP address
+    # matching the destination being probed, and the traceroute is
+    # to stop when this occurs, then stop.
+    ##
+    reason = :stop_completed
+  elsif(is_method(:tcp) && result.tcp_reply?)
+    reason = :stop_completed
+  else
+    reason = :stop_none
+  end
+    
+  return reason
 end
 
-def dump_replies(dealias_result, type_str, probes)
-  probes.each do |probe|
-    result = probe.result
-    if result.reply_tsps_ip1
-      ts_str = result.reply_tsps_ip1 + "=" + result.reply_tsps_ts1.to_s
-      if result.reply_tsps_ip2
-        ts_str += "," + result.reply_tsps_ip2 + "=" + 
-          result.reply_tsps_ts2.to_s
-        if result.reply_tsps_ip3
-          ts_str += "," + result.reply_tsps_ip3 + "=" + 
-            result.reply_tsps_ts3.to_s
-          if result.reply_tsps_ip4
-            ts_str += "," + result.reply_tsps_ip4 + "=" + 
-              result.reply_tsps_ts4.to_s
-          end
-        end
-      end
-    else
-      ts_str = "-"
-    end
-    # dest|type_str|ts_str|reply_ttl|rtt
-    dealias_result.verbose << sprintf("< %s,%s|%s|%s|%s|%s\n", 
-                                      @dealias_result.ipa, @dealias_result.ipb,
-                                      type_str, ts_str, 
-                                      result.reply_ttl || "-", rtt(result))
-  end
+def is_method(method)
+  return $options.probe_method == method
+end
+
+def is_icmp_ttl_exp(result)
+  (!is_method(:tcp) || result.reply_icmp_type == 11)
+end
+
+def is_icmp_ttl_exp_trans(result)
+  (!is_method(:tcp) && 
+   result.reply_icmp_type == 11 && result.reply_icmp_code == 0)
+end
+
+#def is_icmp_ptb(result)
+#  ($options.method != :tcp &&
+#   result.reply_icmp_type == 3 && result.reply_icmp_code == 4)
+#end
+
+def is_icmp_unreach(result)
+  (!is_method(:tcp) && result.reply_icmp_type == 3)
+end
+
+def is_icmp_unreach_port(result)
+  (!is_method(:tcp) &&
+   result.reply_icmp_type == 3 && result.reply_icmp_code == 3)
+ end
+
+def is_icmp_echo_reply(result)
+  (!is_method(:tcp) && result.reply_icmp_type == 0)
+end
+
+def is_target(trace_result, result)
+  (trace_result.target == result.reply_src)
+end
+
+def is_loop(trace_result, result)
+  #implement!
+  return false
 end
 
 #################################################################################
