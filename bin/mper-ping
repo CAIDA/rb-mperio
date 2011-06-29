@@ -70,7 +70,7 @@ opts.on("--ttl", "=NUM", Integer,
 end
 
 opts.on("--timeout", "=NUM", Integer,
-        "the amount of time in ms to wait for a reply from the remote host"
+        "the amount of time in seconds to wait for a reply from the remote host"
         ) do |v|
   $options.timeout = v
 end
