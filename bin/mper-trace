@@ -31,7 +31,7 @@ $options.dport = nil
 $options.firsthop = 1
 $options.gaplimit = 5
 $options.gapaction = :stop
-$options.maxttl = 255
+$options.hoplimit = 255
 $options.loops = 1
 $options.loopaction = 0
 $options.probe_method = :icmp
@@ -39,36 +39,21 @@ $options.attempts = 2
 $options.all_allocated = false
 $options.not_time_exceeded = false
 $options.spacing = 0
+$options.concurrency = nil
+$options.recordroute = 0
 
 opts = OptionParser.new
 
 opts.banner="usage: #{$0} [-?fv] [-n concurrency] [-s spacing] [-l logfile]\n"\
  + " " * $0.to_s.length + "        -p mperport -c candidatefile | IPa IPb"
 
-opts.on("-p", "--mper-port=NUM", Integer,
-	"mper control socket port (REQUIRED)") do |v|
-  $options.mper_port = v
+opts.on("-a", "--attempts=NUM", Integer,
+         "specifies the maximum number of attempts to obtain a response " \
+         "per hop (default: 2)") do |v|
+  $options.attempts = v
 end
 
-opts.on("-c", "--targets=PATH",
-        "file with target address information") do |v|
-  $options.target_path = v
-end
-
-opts.on("-n", "--concurrency=NUM", Integer,
-        "max addresses to trace concurrently (default: unlimited)") do |v|
-  $options.concurrency = v
-end
-
-opts.on("-f", "--full", TrueClass, "show full result output") do |v|
-  $options.full = v
-end
-
-opts.on("-v", "--[no-]verbose", TrueClass,  "show detailed progress") do |v|
-  $options.verbose = v
-end
-
-opts.on("-l", "--log=PATH", "mper command/result message log path") do |v|
+opts.on("-b", "--log=PATH", "mper command/result message log path") do |v|
   $options.log_path = v
 end
 
@@ -76,7 +61,14 @@ opts.on("-c", "--confidence=NUM", Integer,
         "specifies that a hop should be probed to a specified confidence "\
         "level (95% or 99%) to be sure the trace has seen all interfaces "\
         "that will reply for that hop.") do |v|
-  $options.confidence = v
+  case v
+  when 95:
+    $options.confidene = 0
+  when 99:
+    $options.confidence = 1
+  else
+    raise OptionParser::ParseError
+  end
 end
 
 opts.on("-d", "--dport=NUM", Integer,
@@ -84,6 +76,11 @@ opts.on("-d", "--dport=NUM", Integer,
         "and TCP-based traceroute methods. For ICMP-based methods, this " \
         "option has no effect.") do |v|
   $options.dport = v
+end
+
+opts.on("-D", "--mper-port=NUM", Integer,
+	"mper control socket port (REQUIRED)") do |v|
+  $options.mper_port = v
 end
 
 opts.on("-f", "--firsthop=NUM", Integer, 
@@ -99,10 +96,9 @@ opts.on("-g", "--gaplimit=NUM", Integer,
   $options.gaplimit = v
 end
 
-opts.on("-G", "--gapaction=[stop|lastditch]", String,
-        "specifies what should happen if the gaplimit condition is met.  A " \
-        "value of 1 (default) means halt probing, while a value of 2 means " \
-        "send last-ditch probes.") do |v|
+opts.on("-G", "--gapaction=STR", String,
+        "specifies what should happen if the gaplimit condition is met. " \
+        "stop: halt probing, lastditch: send last-ditch probes.") do |v|
   if v == "stop"
     $options.gapaction = :stop
   elsif v == "lastditch"
@@ -112,50 +108,57 @@ opts.on("-G", "--gapaction=[stop|lastditch]", String,
   end
 end
 
-opts.on("-m", "--maxttl=NUM", Integer, 
-        "specifies the maximum TTL or HLIM value that will be probed.  By "\
-        "default, there is no restriction, apart from the 255 hops that "\
-        "the Internet protocols allow.") do |v|
-  $options.maxttl = v
+opts.on("-i", "--targets=PATH",
+        "file with target address information") do |v|
+  $options.target_path = v
 end
 
-#no PMTUD as it is not supported by MperIO
-
 opts.on("-l", "--loops=NUM", Integer,
-        "specifies the maximum number of loops permitted until probing "\
-        "stops.  By default, a value of one is used.  A value of zero "\
-        "disables loop checking.") do |v|
-  $options.loops = v
+        "a value of 1 enables loop checking (default), whereas a value of " \
+        "0 disables loop checking.") do |v|
+  if v == 1 || v == 0
+    $options.loops = v
+  else
+    raise OptionParser::ParseError
+  end
 end
 
 opts.on("-L", "--loopaction=NUM", Integer,
-        "specifies the action to take when a loop is encountered.  A value "\
-        "of 1 tells scamper to probe beyond the first loop in the trace."
+        "specifies the number of 'adjacent interface' loops to allow. " \
+        "a value of 0 means that the first set of identical adjacent " \
+        "interfaces will cause the trace to halt, 1 the second set (i.e. "\
+        "allow 1 set)"
         ) do |v|
   $options.loopaction = v
 end
 
-# no payload option as it isn't supported in MperIO -- right?
-
-opts.on("-i", "--icmp", TrueClass,
-        "probe with ICMP echo request (paris depends on mper) (default)") do |v|
-  $options.probe_method = :icmp
+opts.on("-m", "--maxttl=NUM", Integer, 
+        "specifies the maximum TTL or HLIM value that will be probed.  By "\
+        "default, there is no restriction, apart from the 255 hops that "\
+        "the Internet protocols allow.") do |v|
+  $options.hoplimit = v
 end
 
-opts.on("-u", "--udp", TrueClass,
-        "probe with UDP (paris depends on mper)") do |v|
-  $options.probe_method = :udp
+opts.on("-n", "--concurrency=NUM", Integer,
+        "max addresses to trace concurrently (default: unlimited - be careful,"\
+        " this will try and trace all interfaces simultaneously)") do |v|
+  $options.concurrency = v
 end
 
-opts.on("-t", "--tcp", TrueClass,
-        "probe with TCP ACK") do |v|
-  $options.probe_method = :tcp
-end
-
-opts.on("-a", "--attempts=NUM", Integer,
-         "specifies the maximum number of attempts to obtain a response " \
-         "per hop (default: 2)") do |v|
-  $options.attempts = v
+opts.on("-P", "--method=STR", String,
+        "icmp: probe with ICMP echo request (paris depends on mper) (default), "\
+        "udp: probe with UDP packets, or tcp: TCP ACK") do |v|
+  $stderr.puts "v: #{v}"
+  case v
+  when "icmp":
+      $options.probe_method = :icmp
+  when "udp":
+      $options.probe_method = :udp
+  when "tcp":
+      $options.probe_method = :tcp
+  else
+    raise OptionParser::ParseError
+  end
 end
 
 opts.on("-Q", "--all-allocated", TrueClass,
@@ -164,7 +167,10 @@ opts.on("-Q", "--all-allocated", TrueClass,
   $options.all_allocated = v
 end
 
-# no sport as it is not supported by MperIO
+opts.on("-R", "--recordroute", TrueClass,
+        "enable the record route IP option (default: off)") do |v|
+  $options.rr = 1
+end
 
 opts.on("-S", "--src-addr=ADDR", String,
         "specifies the source address to use in probes.  The address "\
@@ -172,11 +178,10 @@ opts.on("-S", "--src-addr=ADDR", String,
   $options.src_addr = v
 end
 
-# no tos as it is not supported by MperIO (note, we stole -t for --tcp)
-opts.on("-z" "--tos=HEX", String,
-        "specifies the value to set in the IP ToS/DSCP + ECN byte.  By "\
-        "default, this byte is set to zero.") do |v|
-  $options.tos = v.hex
+opts.on("-t", "--tsps=STR", String,
+        "addresses to use for the prespecified timestamp IP option. "\
+        "format: ip1[,ip2[,ip3[,ip4]]]") do |v|
+  $options.tsps = v.split(",")
 end
 
 opts.on("-T", "--not-time-exceeded", TrueClass,
@@ -185,7 +190,13 @@ opts.on("-T", "--not-time-exceeded", TrueClass,
   $options.not_time_exceeded = v
 end
 
-# userid is not supported by MperIO
+opts.on("-v", "--[no-]verbose", TrueClass,  "show detailed progress") do |v|
+  $options.verbose = v
+end
+
+opts.on("-V", "--full", TrueClass, "show full result output") do |v|
+  $options.full = v
+end
 
 opts.on("-w", "--timeout=NUM", Integer,
         "specifies how long to wait, in seconds, for a reply.  By default, "\
@@ -200,9 +211,11 @@ opts.on("-W", "--wait-probe=NUM", Integer,
   $options.spacing = v
 end
 
-# gss-entry is not supported as we do not do doubletree
-
-# lss-name is not supported as we do not do doubletree
+opts.on("-z", "--tos=HEX", String,
+        "specifies the value to set in the IP ToS/DSCP + ECN byte.  By "\
+        "default, this byte is set to zero.") do |v|
+  $options.tos = v.hex
+end
 
 opts.on_tail("-?", "--help", "show this message") do
   puts opts
@@ -226,6 +239,26 @@ end
 unless $options.target_path || ARGV.length >= 1
   $stderr.puts "ERROR: target file path "\
     "or at least one address must be specified\n\n"
+  $stderr.puts opts
+  exit -1
+end
+
+if $options.confidence && $options.all_allocated
+  $stderr.puts "ERROR: only one of 'confidence' or 'all-allocated' may " \
+  "be specified at once"
+  $stderr.puts opts
+  exit -1
+end
+
+if $options.hoplimit && $options.hoplimit < $options.firsthop
+  $stderr.puts "ERROR: firsthop is set further than the hoplimit"
+  $stderr.puts opts
+  exit -1
+end
+
+if $options.tsps && $options.rr
+  $stderr.puts "ERROR: only one of tsps and record route may be specified " \
+  "at once"
   $stderr.puts opts
   exit -1
 end
@@ -377,16 +410,20 @@ class TraceManager
                         :src_addr, $options.src_addr,
                         :tos, $options.tos,
                         :timeout, $options.timeout,
-                        :spacing, $options.spacing)
+                        :spacing, $options.spacing,
+                        :tsps, $options.tsps,
+                        :rr, $options.rr)
       when :udp
       @mperio.ping_udp(probe.id, probe.dest, :ttl, probe.ttl,
-                        :src_addr, $options.src_addr,
-                        :tos, $options.tos,
-                        :timeout, $options.timeout,
-                        :spacing, $options.spacing)
+                       :dport, $options.dport,
+                       :src_addr, $options.src_addr,
+                       :tos, $options.tos,
+                       :timeout, $options.timeout,
+                       :spacing, $options.spacing)
 
     when :tcp
       @mperio.ping_tcp(probe.id, probe.dest, :ttl, probe.ttl,
+                       :dport, $options.dport,
                        :src_addr, $options.src_addr,
                        :tos, $options.tos,
                        :timeout, $options.timeout,
@@ -522,8 +559,7 @@ end
 class TraceResult
   
   attr_reader :target
-  attr_accessor :hops, :stop_reason
-  
+  attr_accessor :hops, :stop_reason  
   def initialize(target)
     @target = target
     @hops = [] # hash of hops TTL => hop
@@ -532,7 +568,7 @@ class TraceResult
 
   def allocate_hop(ttl)
     hop = Hop.new(ttl)
-    @hops << hop
+    @hops[ttl-1] = hop
     return hop
   end
 
@@ -543,6 +579,7 @@ class TraceResult
   def to_s
     str = "traceroute to #{@target}\n"
     @hops.each do |hop|
+      next unless hop
       str += hop.to_s
     end
     str += "stop reason: #{@stop_reason}\n"
@@ -564,11 +601,32 @@ class Hop
     str = @ttl.to_s
     @results.each do |result|
       if result.responded?
-        str += sprintf("\t%s\t\%s ms\n", result.reply_src, rtt(result))
+        str += sprintf("\t%s\t\%s ms", result.reply_src, rtt(result))
+        if $options.full
+          if $options.tsps
+            str += sprintf("\t%s", build_tsps_str(result))
+          elsif $options.rr
+            str += sprintf("\t%s", result.reply_rr)
+          end
+        end
+        str += "\n"
       else
         str += sprintf("\t*\n")
       end
     end
+    return str
+  end
+
+  def build_tsps_str(result)
+    str = ""
+    str += sprintf("%s=%d", result.reply_tsps_ip1, result.reply_tsps_ts1) if 
+      result.reply_tsps_ip1
+    str += sprintf("%s=%d", result.reply_tsps_ip2, result.reply_tsps_ts2) if 
+      result.reply_tsps_ip2
+    str += sprintf("%s=%d", result.reply_tsps_ip3, result.reply_tsps_ts3) if 
+      result.reply_tsps_ip3
+    str += sprintf("%s=%d", result.reply_tsps_ip4, result.reply_tsps_ts4) if 
+      result.reply_tsps_ip4
     return str
   end
 
@@ -589,7 +647,7 @@ class TraceTask
     @taskid = taskid
     @target = target
 
-    log("#{@target}: trace starting");
+    log("#{@target}: trace starting at #{Time.now}");
 
     @trace_result = TraceResult.new(@target)
     @is_complete = false
@@ -607,6 +665,8 @@ class TraceTask
     
     @interfaces = []
 
+    @state = :trace
+
     # i think that for the moment we can do all of the probing from this
     # one task.
     # reintroduce later if we need sub-tasks
@@ -615,8 +675,10 @@ class TraceTask
   end
   
   def add_interface(interface)
-    @interfaces << interface unless @interfaces.contains(interface)
-    @n += 1
+    unless @interfaces.include?(interface)
+      @interfaces << interface
+      @n += 1
+    end
   end
   
   def to_s
@@ -656,15 +718,22 @@ class TraceTask
     end
 
     @pending_probes -= 1
-
-    if !probe.result.responded?
-      receive_timeout_probe(probe)
-    elsif probe.result.icmp_reply?
-      receive_icmp_probe(probe)
-    elsif probe.result.tcp_reply?
-      receive_tcp_probe(probe)
-    else
-      $stderr.puts "FATAL ERROR: unknown reply type"
+    if @state == :trace
+      if !probe.result.responded?
+        receive_timeout_probe(probe)
+      elsif probe.result.icmp_reply?
+        receive_icmp_probe(probe)
+      elsif probe.result.tcp_reply?
+        receive_tcp_probe(probe)
+      else
+        $stderr.puts "FATAL ERROR: unknown reply type"
+      end
+    elsif @state == :lastditch
+      if !probe.result.responded?
+        receive_lastditch_timeout_probe(probe)
+      else
+        receive_lastditch_probe(probe)
+      end
     end
   end
 
@@ -686,7 +755,7 @@ class TraceTask
     # if this reply is not for the current ttl (i.e. a late reply),
     # check if we can stop now
     if(result.probe_ttl != @ttl)
-      reason = stop_reason(@trace_result, result)
+      reason = stop_reason(result)
       if(reason != :stop_none)
         @trace_result.stop_reason = reason
         return
@@ -748,16 +817,14 @@ class TraceTask
           @is_complete = false
           return
         end
-
-        ##
-        # if we get to here, the confidence for this hop is done,
-        # reset the state we keep about that stuff
-        ##
-        @n = 2
-        @interfaces = []
       end
 
-      @attempt = 1
+      ##
+      # if we get to here, the confidence for this hop is done,
+      # reset the state we keep about that stuff
+      ##
+      @n = 2
+      @interfaces = []
     end
 
     ##
@@ -767,22 +834,27 @@ class TraceTask
     ##
     if(!$options.confidence && !$options.all_allocated)
       #check to see if we have a stop reason from the ICMP response
-      reason = stop_reason(@trace_result, result)
+      reason = stop_reason(result)
       if(reason != :stop_none)
         @trace_result.stop_reason = reason
         return
       end
     else
       # check all hop records for a reason to halt the trace
-      @trace_result.hops.each do |hop|
-        hop.results.each do |tr|
-          reason = stop_reason(@trace_result, tr)
-          if(reason != :stop_none)
-            @trace_result.stop_reason = reason
-            return
-          end
+      # @trace_result.hops.each do |hop|
+        #next unless hop
+      checked = []
+      hop.results.each do |tr|
+        # there is no point checking if we have already checked this interface
+        next if checked.include? tr.reply_src
+        checked << tr.reply_src
+        reason = stop_reason(tr)
+        if(reason != :stop_none)
+          @trace_result.stop_reason = reason
+          return
         end
       end
+      # end
     end
     
     # check if we've reached the hoplimit
@@ -838,6 +910,24 @@ class TraceTask
     return
   end
 
+  def receive_lastditch_probe(probe)
+    result = probe.result
+    hop = @trace_result.hop_at_ttl(result.probe_ttl)
+
+    unless hop
+      $stderr.puts "FATAL ERROR: no hop record for #{result.probe_ttl}"
+      exit -1
+    end
+
+    hop.results << result
+
+    # we received a reply from the destination, be done.
+
+    @is_complete = true
+    @trace_result.stop_reason = :gaplimit
+    return
+  end
+
   def receive_timeout_probe(probe)
     result = probe.result
 
@@ -859,8 +949,12 @@ class TraceTask
       # used for a stop reason. this shouldnt apply for us, but let's do
       # it anyway.
       @trace_result.hops.each do |hop|
+        next unless hop
+        checked = []
         hop.results.each do |tr|
-          reason = stop_reason(@trace_result, tr)
+          next if checked.include? tr.reply_src
+          checked << tr.reply_src
+          reason = stop_reason(tr)
           if(reason != :stop_none)
             @trace_result.stop_reason = reason
             return
@@ -890,32 +984,227 @@ class TraceTask
 
         # add lastditch mode stuff in here
         if deadpath
-          @trace_result.stop_reason = :gaplimit
+          if $options.gapaction == :stop
+            @trace_result.stop_reason = :gaplimit
+          elsif $options.gapaction == :lastditch
+            @is_complete = false
+            @state = :lastditch
+            @attempt = 0
+            @ttl = 255
+            @trace_result.allocate_hop(@ttl)
+          else
+            $stderr.puts "FATAL ERROR: invalid gapaction: $options.gapaction"
+          end
           return
         end
 
       end
-
       @attempt = 0
       @ttl += 1
       @trace_result.allocate_hop(@ttl)
       @is_complete = false
     end
+  end
+
+  def receive_lastditch_timeout_probe(probe)
+    result = probe.result
+
+    hop = @trace_result.hop_at_ttl(result.probe_ttl)
+
+    unless hop
+      $stderr.puts "FATAL ERROR: no hop record for #{result.probe_ttl}"
+      exit -1
+    end
+
+    hop.results << result
     
+    if(@attempt == $options.attempts)
+      # this is the last lastditch probe, give up!
+      @is_complete = true
+      @trace_result.stop_reason = :gaplimit
+      return
+    end
   end
 
   def is_complete
-    puts @trace_result if @is_complete
+    if @is_complete
+      puts @trace_result 
+      log("#{@target}: trace complete at #{Time.now}")
+    end
     return @is_complete
-    #if current_state() == nil
-    #  log("#{@ipa},#{@ipb}: dealiasing complete");
-    #  puts @dealias_result
-    #  true   
-    #else
-    #  false
-    #end
   end
 
+  ###
+  # decide if this result is a good enough reason to stop
+  def stop_reason(result)
+    
+    ##
+    # the message received is an ICMP port unreachable -- something that
+    # the destination should have sent.  make sure the port unreachable
+    # message makes sense based on the traceroute type.
+    ##
+  
+    if(is_icmp_unreach_port(result) && (is_method(:udp) || is_method(:tcp)))
+      reason = :stop_completed
+    elsif(is_icmp_unreach(result))
+      reason = :stop_unreach
+    elsif(is_icmp_echo_reply(result))
+      ##
+      # the message received is an ICMP echo reply -- something that only
+      # makes sense to include as part of the traceroute if the traceroute
+      # is using echo requests.
+      ##
+      if(is_method(:icmp))
+        reason = :stop_completed
+      else
+        reason = :stop_none
+      end
+    elsif($options.loops != 0 && is_loop(result)) 
+      # checked for and found loop condition
+      reason = :stop_loop
+    elsif(is_icmp_ttl_exp(result) && $options.not_time_exceeded == false &&
+          is_target(result))
+      ##
+      # if an ICMP TTL expired message is received from an IP address
+      # matching the destination being probed, and the traceroute is
+      # to stop when this occurs, then stop.
+      ##
+      reason = :stop_completed
+    elsif(is_method(:tcp) && result.tcp_reply?)
+      reason = :stop_completed
+    else
+      reason = :stop_none
+    end
+    
+    return reason
+  end
+  
+  def is_method(method)
+    return $options.probe_method == method
+  end
+  
+  def is_icmp_ttl_exp(result)
+    (!is_method(:tcp) || result.reply_icmp_type == 11)
+  end
+  
+  def is_icmp_ttl_exp_trans(result)
+    (!is_method(:tcp) && 
+     result.reply_icmp_type == 11 && result.reply_icmp_code == 0)
+  end
+  
+  def is_icmp_unreach(result)
+    (!is_method(:tcp) && result.reply_icmp_type == 3)
+  end
+
+  def is_icmp_unreach_port(result)
+    (!is_method(:tcp) &&
+     result.reply_icmp_type == 3 && result.reply_icmp_code == 3)
+  end
+  
+  def is_icmp_echo_reply(result)
+    (!is_method(:tcp) && result.reply_icmp_type == 0)
+  end
+  
+  def is_target(result)
+    (@target == result.reply_src)
+  end
+  
+  def is_loop(result)
+
+    # need at least a couple of probes first
+    if(result.probe_ttl <= $options.firsthop)
+      return false
+    end
+
+    one_adjacent = false
+
+    # compare all hop records until the hop prior to this one
+    (result.probe_ttl-1).downto($options.firsthop) do |i|
+
+      checked_interfaces = []
+
+      # all the results for the hop
+      @trace_result.hop_at_ttl(i).results.each do |res|
+
+        next unless res.responded?
+
+        # only check an address once per hop
+        next if checked_interfaces.include? res.reply_src
+
+        checked_interfaces << res.reply_src
+        # if the addresses match, then there is a loop
+        if(res.reply_src == result.reply_src)
+
+          # if the loop is between adjacent hops
+          if(res.probe_ttl + 1 == result.probe_ttl)
+            
+            ##
+            # check for zero-ttl forwarding.  continue probing if
+            # the condition is met.
+            ##
+            if(res.reply_qttl == 0 && result.reply_qttl == 1)
+              return false
+            end
+            
+            # mark these as adjacent so that if the next interface
+            # is also repeated we can mark that as a loop, otherwise,
+            # mark this as an adjacent loop
+            one_adjacent = true
+
+            # move on to the next hop 
+            # (i.e. ignore any other results at this hop)
+            break
+
+          elsif(res.probe_ttl + 2 == result.probe_ttl && one_adjacent)
+
+            # this loop has one interface in the middle: AXA
+            # and we saw AA at the last hop, so we can infer AAA
+            return true
+
+          end # we're looking at identical addresses but not at adjacent hops
+
+          # these interfaces are not adjacent
+          one_adjacent = false
+          
+          # check if the loop condition is met
+          #@loopc += 1
+          #if(@loopc >= $options.loops)
+          #  return true
+          #end
+          
+          #this assumes that $options.loops == 1
+          # if it is set to 0, this is checked earlier.
+          # setting loops to > 1 is silly and is not allowed
+          # by the arg parse.
+          # if you want the check for the number of 'loops' back,
+          # then comment the following line and uncommend the four
+          # lines above plus the break below
+          return true
+
+          # break
+        elsif(one_adjacent)
+          # this address is not the same as the test address, but
+          # we previously saw AA, so assume we are at AAX and increment
+          # the count of adjacent interface loops
+
+          if(@iloopc < $options.loopaction)
+            @iloopc += 1
+            one_adjacent = false
+            break # look for other loops
+          else 
+            return true
+          end
+        end # addresses are not the same, nor is one_adjacent set
+
+      end # result loop
+
+    end # hop loop
+
+    # got all the way back to the start of the path with no loop
+    return false
+    
+  end
+  
 end #TraceTask
 
 #################################################################################
@@ -947,97 +1236,12 @@ $k = [
 
 CONFIDENCE_MAX_N = $k.length
 
-def k(n, confidence)
-  return $k[n][confidence]
+def k(n)
+  return $k[n][$options.confidence]
 end
 
 def log(message)
   $stderr.puts message if $options.full
-end
-
-###
-# decide if this result is a good enough reason to stop
-def stop_reason(trace_result, result)
-  
-   ##
-   # the message received is an ICMP port unreachable -- something that
-   # the destination should have sent.  make sure the port unreachable
-   # message makes sense based on the traceroute type.
-   ##
-  
-  if(is_icmp_unreach_port(result) && (is_method(:udp) || is_method(:tcp)))
-    reason = :stop_completed
-  elsif(is_icmp_unreach(result))
-    reason = :stop_unreach
-  elsif(is_icmp_echo_reply(result))
-    ##
-    # the message received is an ICMP echo reply -- something that only
-    # makes sense to include as part of the traceroute if the traceroute
-    # is using echo requests.
-    ##
-    if(is_method(:icmp))
-      reason = :stop_completed
-    else
-      reason = :stop_none
-    end
-  elsif($options.loops != 0 && is_loop(trace_result, result)) 
-    # checked for and found loop condition
-    reason = :stop_loop
-  elsif(is_icmp_ttl_exp(result) && $options.not_time_exceeded == false &&
-        is_target(trace_result, result))
-    ##
-    # if an ICMP TTL expired message is received from an IP address
-    # matching the destination being probed, and the traceroute is
-    # to stop when this occurs, then stop.
-    ##
-    reason = :stop_completed
-  elsif(is_method(:tcp) && result.tcp_reply?)
-    reason = :stop_completed
-  else
-    reason = :stop_none
-  end
-    
-  return reason
-end
-
-def is_method(method)
-  return $options.probe_method == method
-end
-
-def is_icmp_ttl_exp(result)
-  (!is_method(:tcp) || result.reply_icmp_type == 11)
-end
-
-def is_icmp_ttl_exp_trans(result)
-  (!is_method(:tcp) && 
-   result.reply_icmp_type == 11 && result.reply_icmp_code == 0)
-end
-
-#def is_icmp_ptb(result)
-#  ($options.method != :tcp &&
-#   result.reply_icmp_type == 3 && result.reply_icmp_code == 4)
-#end
-
-def is_icmp_unreach(result)
-  (!is_method(:tcp) && result.reply_icmp_type == 3)
-end
-
-def is_icmp_unreach_port(result)
-  (!is_method(:tcp) &&
-   result.reply_icmp_type == 3 && result.reply_icmp_code == 3)
- end
-
-def is_icmp_echo_reply(result)
-  (!is_method(:tcp) && result.reply_icmp_type == 0)
-end
-
-def is_target(trace_result, result)
-  (trace_result.target == result.reply_src)
-end
-
-def is_loop(trace_result, result)
-  #implement!
-  return false
 end
 
 #################################################################################
