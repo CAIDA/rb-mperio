@@ -723,13 +723,29 @@ class TraceSim
 
 
       # check if this is a zero-ttl forwarding case
-      if scamper_stop_to_symbol(trace.stop_reason) == :stop_loop &&
-          trace.hop_inner_ipttl(trace.hop_count-1) == 1 && 
+      if scamper_stop_to_symbol(trace.stop_reason) == :stop_loop
+        if trace.hop_inner_ipttl(trace.hop_count-1) == 1 && 
           trace.hop_inner_ipttl(trace.hop_count-2) == 0
-        puts "skipping trace with zero-ttl forwarding: #{trace.dst}"
-        next
+          # this is zttl
+          zttl = true
+        end
+        if trace.hop_addr(trace.hop_count-1) == 
+            trace.hop_addr(trace.hop_count-2)
+          # check for zttl earlier in the path
+          trace.hop_count.downto(2) do |i|
+            if trace.hop_exists?(i) && trace.hop_inner_ipttl(i-2) == 1 &&
+                trace.hop_inner_ipttl(i-2) == 0
+              zttl = true
+            end
+          end
+        end
       end
 
+      if zttl
+        puts "skipping #{trace.list_monitor} #{trace.dst} zero-ttl"
+        next
+      end
+      
       $options.attempts = trace.attempts
       $options.hoplimit = trace.hoplimit
       $options.gaplimit = trace.gaplimit
