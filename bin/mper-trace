@@ -735,6 +735,8 @@ class TraceSim
       destination_queue = []
 
       while !task.is_complete && (probe = task.next_probe) != nil
+        duplicate_queue = []
+        
         if trace.hop_exists?(probe.ttl-1, probe.attempt-1) && 
             trace.hop_rtt(probe.ttl-1, probe.attempt-1) > 
             trace.wait * 1000
@@ -755,7 +757,8 @@ class TraceSim
             duplicate = probe.clone
             duplicate.attempt = response
             insert_result(duplicate, trace)
-            task.receive_probe(duplicate)
+            #task.receive_probe(duplicate)
+            duplicate_queue << duplicate
             response += 1
           end
         end
@@ -765,6 +768,10 @@ class TraceSim
           task.receive_probe(late_queue.shift) 
         end
         
+        duplicate_queue.each do |duplicate|
+          task.receive_probe(duplicate)
+        end
+
         task.receive_probe(probe)
         
         if probe.ttl == trace.hop_count
@@ -3208,6 +3215,8 @@ class TraceTask
     hop.results << result
     hop.responsive = true
 
+    return if @is_complete # no point checking any more
+
     # to make the port from scamper easier, we assume that we're not
     # going to probe any more as the default position of this method
     @is_complete = true
@@ -3349,6 +3358,8 @@ class TraceTask
     hop.results << result
     hop.responsive = true
 
+    return if @is_complete # no point checking any more
+
     # to make the port from scamper easier, we assume that we're not
     # going to probe any more as the default position of this method
     @is_complete = true
@@ -3385,6 +3396,8 @@ class TraceTask
     hop.results << result
     hop.responsive = true
 
+    return if @is_complete # no point checking any more
+
     # we received a reply from the destination, be done.
 
     @is_complete = true
@@ -3403,6 +3416,8 @@ class TraceTask
     end
 
     hop.results << result
+
+    return if @is_complete # no point checking any more
 
     if(@attempt == @options.attempts)
       @is_complete = true
