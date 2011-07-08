@@ -648,7 +648,15 @@ class TraceSim
       end
     end
    
-    str += "stop reason: #{scamper_stop_to_symbol(trace.stop_reason)}\n"
+    # a somewhat naive way to convert scamper's old stop_completed to
+    # stop_unreach based on the icmp type of the last response
+    if scamper_stop_to_symbol(trace.stop_reason) == :stop_completed && 
+        trace.hop_icmp_type(trace.hop_count-1) == 3 &&
+        trace.hop_icmp_code(trace.hop_count-1) == 3
+      str += "stop reason: stop_unreach\n"
+    else
+      str += "stop reason: #{scamper_stop_to_symbol(trace.stop_reason)}\n"
+    end
 
   end
       
@@ -721,7 +729,7 @@ class TraceSim
       $options.loops = trace.loops
       $options.loopaction = 1
 
-      task = TraceTask.new(next_taskid, trace.dest, $options)
+      task = TraceTask.new(next_taskid, trace.dst, $options)
 
       late_queue = []
       destination_queue = []
@@ -2478,6 +2486,10 @@ class TraceTestLoopTest
     execute_test(method, :adjacent_loop_ABBC_allow)
     execute_test(method, :adjacent_loop_ABBCZDDE_disallow)
     execute_test(method, :adjacent_loop_ABBCZDDE_allow)
+    execute_test(method, :adjacent_loop_ABBCC__E_disallow)
+    execute_test(method, :adjacent_loop_ABBCC__E_allow)
+    execute_test(method, :adjacent_loop_mnlph_disallow)
+    execute_test(method, :adjacent_loop_mnlph_allow)
     execute_test(method, :combo_loop_ABBCA_disallow)
     execute_test(method, :combo_loop_ABBCA_allow_adjacent)
     execute_test(method, :combo_loop_ABBCA_allow_both)
@@ -2526,6 +2538,32 @@ class TraceTestLoopTest
     when :adjacent_loop_ABBCZDDE_allow:
         $options.loopaction = 2
       loop = ["A", "B", "B", "C", "Z", "D", "D", "E"]
+    when :adjacent_loop_ABBCC__E_disallow:
+        $options.loopaction = 1
+      loop = ["A", "B", "B", "C", "C", nil, nil, "E"]
+    when :adjacent_loop_ABBCC__E_allow:
+        $options.loopaction = 2
+      loop = ["A", "B", "B", "C", "C", nil, nil, "E"]
+    when :adjacent_loop_mnlph_disallow:
+        $options.loopaction = 1
+      loop_start = 1
+      path_length = 21
+      loop = ["202.90.149.65", "203.177.10.245", "120.28.0.149", "120.28.0.129",
+              "120.28.0.10", "120.28.0.46", "120.29.217.29", "180.87.180.41", 
+              "180.87.180.26", "180.87.12.54", "180.87.36.14", "116.0.79.34", 
+              "59.163.16.121", "59.163.16.121", "172.31.55.222", 
+              "172.31.55.222", nil, nil, nil, nil, nil, nil, nil, nil, nil, 
+              nil, nil, nil, nil, nil, nil]
+    when :adjacent_loop_mnlph_allow:
+        $options.loopaction = 2
+      loop_start = 1
+      path_length = 21
+      loop = ["202.90.149.65", "203.177.10.245", "120.28.0.149", "120.28.0.129",
+              "120.28.0.10", "120.28.0.46", "120.29.217.29", "180.87.180.41", 
+              "180.87.180.26", "180.87.12.54", "180.87.36.14", "116.0.79.34", 
+              "59.163.16.121", "59.163.16.121", "172.31.55.222", 
+              "172.31.55.222", nil, nil, nil, nil, nil, nil, nil, nil, nil, 
+              nil, nil, nil, nil, nil, nil]
     when :combo_loop_ABBCA_disallow:
         $options.loops = 1
       $options.loopaction = 0
@@ -2571,6 +2609,9 @@ class TraceTestLoopTest
           
       elsif probe.ttl >= loop_start && loop.length > 0
         result.reply_src = loop.shift
+        unless result.reply_src
+          result.responded = false
+        end
       end
 
       task.receive_probe(probe)
@@ -2699,6 +2740,82 @@ stop reason: stop_loop
 10	192.168.10.1	1000.000 ms
 11	192.168.11.1	1000.000 ms
 12	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    when :adjacent_loop_ABBCC__E_disallow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	C	1000.000 ms
+stop reason: stop_loop
+"
+    when :adjacent_loop_ABBCC__E_allow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	C	1000.000 ms
+7	*
+	*
+8	E	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    when :adjacent_loop_mnlph_disallow:
+        return "traceroute to 192.168.12.1
+1	202.90.149.65	1000.000 ms
+2	203.177.10.245	1000.000 ms
+3	120.28.0.149	1000.000 ms
+4	120.28.0.129	1000.000 ms
+5	120.28.0.10	1000.000 ms
+6	120.28.0.46	1000.000 ms
+7	120.29.217.29	1000.000 ms
+8	180.87.180.41	1000.000 ms
+9	180.87.180.26	1000.000 ms
+10	180.87.12.54	1000.000 ms
+11	180.87.36.14	1000.000 ms
+12	116.0.79.34	1000.000 ms
+13	59.163.16.121	1000.000 ms
+14	59.163.16.121	1000.000 ms
+15	172.31.55.222	1000.000 ms
+16	172.31.55.222	1000.000 ms
+stop reason: stop_loop
+"
+    when :adjacent_loop_mnlph_allow:
+        return "traceroute to 192.168.12.1
+1	202.90.149.65	1000.000 ms
+2	203.177.10.245	1000.000 ms
+3	120.28.0.149	1000.000 ms
+4	120.28.0.129	1000.000 ms
+5	120.28.0.10	1000.000 ms
+6	120.28.0.46	1000.000 ms
+7	120.29.217.29	1000.000 ms
+8	180.87.180.41	1000.000 ms
+9	180.87.180.26	1000.000 ms
+10	180.87.12.54	1000.000 ms
+11	180.87.36.14	1000.000 ms
+12	116.0.79.34	1000.000 ms
+13	59.163.16.121	1000.000 ms
+14	59.163.16.121	1000.000 ms
+15	172.31.55.222	1000.000 ms
+16	172.31.55.222	1000.000 ms
+17	*
+	*
+18	*
+	*
+19	*
+	*
+20	*
+	*
+21	192.168.12.1	1000.000 ms
 stop reason: stop_completed
 "
     else raise "invalid type flag #{type}"
