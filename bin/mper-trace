@@ -726,7 +726,7 @@ class TraceSim
       if scamper_stop_to_symbol(trace.stop_reason) == :stop_loop &&
           trace.hop_inner_ipttl(trace.hop_count-1) == 1 && 
           trace.hop_inner_ipttl(trace.hop_count-2) == 0
-        $stderr.puts "skipping trace with zero-ttl forwarding: #{trace.dst}"
+        puts "skipping trace with zero-ttl forwarding: #{trace.dst}"
         next
       end
 
