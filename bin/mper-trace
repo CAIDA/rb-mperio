@@ -733,7 +733,7 @@ class TraceSim
             trace.hop_addr(trace.hop_count-2)
           # check for zttl earlier in the path
           trace.hop_count.downto(2) do |i|
-            if trace.hop_exists?(i) && trace.hop_inner_ipttl(i-2) == 1 &&
+            if trace.hop_exists?(i-1) && trace.hop_inner_ipttl(i-2) == 1 &&
                 trace.hop_inner_ipttl(i-2) == 0
               zttl = true
             end
