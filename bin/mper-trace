@@ -728,12 +728,12 @@ class TraceSim
           trace.hop_inner_ipttl(trace.hop_count-2) == 0
           # this is zttl
           zttl = true
-        end
-        if trace.hop_addr(trace.hop_count-1) == 
+        elsif trace.hop_addr(trace.hop_count-1) == 
             trace.hop_addr(trace.hop_count-2)
           # check for zttl earlier in the path
           trace.hop_count.downto(2) do |i|
-            if trace.hop_exists?(i-1) && trace.hop_inner_ipttl(i-1) == 1 &&
+            if trace.hop_exists?(i-1) && trace.hop_exists?(i-2) && 
+                trace.hop_inner_ipttl(i-1) == 1 &&
                 trace.hop_inner_ipttl(i-2) == 0
               zttl = true
             end
@@ -763,9 +763,10 @@ class TraceSim
         duplicate_queue = []
         
         if trace.hop_exists?(probe.ttl-1, probe.attempt-1) && 
-            trace.hop_rtt(probe.ttl-1, probe.attempt-1) > 
-            trace.wait * 1000
-          # send a timeout and save this for later
+            trace.hop_rtt(probe.ttl-1, probe.attempt-1) >
+            (trace.wait*1000)*(trace.attempts-probe.attempt+1)
+          # only send a timeout if this timeout is greater than the
+          # time left to be spent on the hop
           late = probe.clone
           insert_result(late, trace)
 
