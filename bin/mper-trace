@@ -721,6 +721,15 @@ class TraceSim
       total_cnt += 1
       scamper_output = scamper_trace_to_ascii(trace)
 
+
+      # check if this is a zero-ttl forwarding case
+      if scamper_stop_to_symbol(trace.stop_reason) == :stop_loop &&
+          trace.hop_inner_ipttl(trace.hop_count-1) == 1 && 
+          trace.hop_inner_ipttl(trace.hop_count-2) == 0
+        $stderr.puts "skipping trace with zero-ttl forwarding: #{trace.dst}"
+        next
+      end
+
       $options.attempts = trace.attempts
       $options.hoplimit = trace.hoplimit
       $options.gaplimit = trace.gaplimit
