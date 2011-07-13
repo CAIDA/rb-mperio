@@ -3627,6 +3627,18 @@ class TraceTask
       return false
     end
 
+    ##
+    # check to see if the address has already been seen this hop; if it is,
+    # then we've already checked this address for loops so we don't need to
+    # check it again.
+    ##
+    @trace_result.hop_at_ttl(result.probe_ttl).results.each do |res|
+      # if it is not this interface AND not this result, call it not a loop
+      if res != result && res.reply_src == result.reply_src
+        return false
+      end
+    end
+
     one_adjacent = false
 
     # compare all hop records until the hop prior to this one
