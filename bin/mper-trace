@@ -23,8 +23,12 @@ require 'optparse'
 require 'mperio'
 require 'wartslib'
 
+require 'yaml'
+
 #never buffer stdout
 $stdout.sync = true
+
+BINARY_RECORD_SEPARATOR = "--__mper-trace-record__--"
 
 $options = OpenStruct.new
 $options.log_path = nil  # disable logging by default
@@ -45,6 +49,8 @@ $options.spacing = 0
 $options.concurrency = nil
 $options.recordroute = 0
 $options.test = false
+$options.timeout = 5
+$options.outformat = "ascii"
 
 opts = OptionParser.new
 
@@ -78,7 +84,7 @@ end
 opts.on("-d", "--dport=NUM", Integer,
         "specifies the base destination port value to use for UDP-based " \
         "and TCP-based traceroute methods. For ICMP-based methods, this " \
-        "option has no effect.") do |v|
+        "option sets the checksum.") do |v|
   $options.dport = v
 end
 
@@ -153,6 +159,22 @@ opts.on("-n", "--concurrency=NUM", Integer,
         "max addresses to trace concurrently (default: unlimited - be careful,"\
         " this will try and trace all interfaces simultaneously)") do |v|
   $options.concurrency = v
+end
+
+opts.on("-o", "--output-file=STR", String,
+        "specifies the output file to write measurements to. By default, "\
+        "stdout is used.") do |v|
+  $options.outfile = v
+end
+
+opts.on("-O", "--output-format=STR", String,
+        "sepecifies the output format for measurements. the current options "\
+        "are 'ascii' (which produces a human-readable output similar to "\
+        "unix traceroute), 'yaml' (which serializes the TraceResult object "\
+        "to a yaml format, preserving all of the response data) and 'binary' "\
+        " (which serializes the TraceResult object to a binary format). "\
+        "The default is 'ascii'") do |v|
+  $options.outformat = v
 end
 
 opts.on("-P", "--method=STR", String,
@@ -277,6 +299,39 @@ if $options.tsps && $options.rr
   "at once"
   $stderr.puts opts
   exit -1
+end
+
+if $options.probe_method == :icmp && $options.dport
+  $options.checksum = $options.dport
+  $options.dport = nil
+end
+
+if $options.outformat
+  if $options.outformat == "ascii"
+    $record_separator = "\n"
+  elsif $options.outformat == "yaml"
+    $record_separator = "\n\n"
+  elsif $options.outformat == "binary"
+    $record_separator = BINARY_RECORD_SEPARATOR
+  else
+    $stderr.puts "output format must be one of 'ascii', 'yaml', or 'binary'"
+    $stderr.puts opts
+    exit -1
+  end
+end
+
+if $options.outfile
+  begin
+    $outfile = File.open($options.outfile, "w")
+    $outfile.puts $options.outformat
+    $outfile.print $record_separator
+  rescue
+    $stderr.puts "ERROR: could not open $outfile for reading"
+    $stderr.puts opts
+    exit -1
+  end
+else
+  $outfile = $stderr;
 end
 
 #============================================================================
@@ -410,7 +465,8 @@ class TraceManager
                         :timeout, $options.timeout,
                         :spacing, $options.spacing,
                         :tsps, $options.tsps,
-                        :rr, $options.rr)
+                        :rr, $options.rr,
+                        :cksum, $options.checksum)
       when :udp
       @mperio.ping_udp(probe.id, probe.dest, :ttl, probe.ttl,
                        :dport, $options.dport,
@@ -480,8 +536,22 @@ class TraceManager
       
       # no need to continue probing it
       if task.is_complete
-        # we only support ASCII output at the moment, so dump the result
-        puts task.result
+        
+        if !$options.outformat || $options.outformat == "ascii"
+          #output in ascii
+          $outfile.print task.result.to_s
+        elsif $options.outformat == 'yaml'
+          #output in yaml
+          $outfile.print YAML::dump(task.result)
+        elsif $options.outformat == 'binary'
+          $outfile.print Marshal::dump(task.result)
+        else
+          $stderr.puts "FATAL ERROR: Unknown output format " \
+            "#{$options.outformat}"
+          exit -1
+        end
+        $outfile.print $record_separator
+
         # add another task (if there are any remaining)
         fill_task_queue()
         # we haven't managed to send a probe yet, keep trying
