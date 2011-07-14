@@ -1,0 +1,279 @@
+#!/usr/bin/env ruby
+
+################################################################################
+#
+# A convertor for mper-trace output data.
+# 
+# Currently mper-trace supports two output methods: yaml and ascii, this
+# tool allows the conversion from yaml to ascii, and from yaml to yaml.
+# The yaml to yaml conversion is more for sanity to ensure that the
+# serialization is being done correctly. You could possibly also use it to
+# concatenate yaml files, although this should probably just be done with cat
+#
+################################################################################
+
+if $0 =~ /dev$/
+  $: << "#{ENV['HOME']}/caida/rb-mperio/ext"
+  $: << "#{ENV['HOME']}/caida/rb-mperio/lib"
+#else
+#  require 'rubygems'
+end
+
+require 'rubygems'
+
+require 'ostruct'
+require 'optparse'
+
+require 'mperio'
+
+require 'yaml'
+
+BINARY_RECORD_SEPARATOR = "--__mper-trace-record__--"
+
+$options = OpenStruct.new
+
+$options.outfile = $stdout
+$options.outformat = 'ascii'
+$options.infiles
+
+opts = OptionParser.new
+
+opts.banner="usage: #{$0} [-f format] [-o outfile] infile[s]"
+
+opts.on("-f", "--output-format=STR", String,
+        "specifies the output format for the traces (ascii|yaml|binary). " \
+        "The default is ascii") do |v|
+  $options.outformat = v
+end
+
+opts.on("-o", "--output-file=STR", String,
+        "specifies the file which the output should be written to. " \
+        "The default is stdout.") do |v|
+  begin
+    $options.outfile = File.open(v, "w")
+  rescue
+    $stderr.puts "Could not open #{v} for writing"
+    raise OptionParser::ParseError
+  end
+end
+
+begin
+  opts.parse!(ARGV)
+rescue OptionParser::ParseError
+  $stderr.puts "ERROR: " + $!.to_s + "\n\n"
+  $stderr.puts opts
+  exit -1
+end
+
+unless ARGV.length >= 1
+  $stderr.puts "ERROR: there must be at least one input file specified"
+  $stderr.puts opts
+  exit -1
+end
+
+$options.outfile.puts $options.outformat
+if $options.outformat == "ascii"
+  $options.record_sep = "\n"
+elsif $options.outformat == "yaml"
+  $options.record_sep = "\n\n"
+  $options.format = YAML
+elsif $options.outformat == "binary"
+  $options.format = Marshal
+  $options.record_sep = BINARY_RECORD_SEPARATOR
+else
+  $stderr.puts "Output format must be one of 'ascii', 'yaml' or 'binary'"
+  $stderr.puts opts
+  exit -1
+end
+$options.outfile.print $options.record_sep
+
+$options.infiles = ARGV
+
+#==============================================================================
+# TraceResult
+# 
+# A TraceResult object encapsulates the results of a traceroute to a given
+# destination address.
+# It is initialized with the target (destination) address of the trace and
+# the firsthop TTL value with which to initialize the hop array.
+# Once tracing is complete, it contains an array of Hop objects which
+# themselves contain the responses to the trace probes.
+# 
+# The hops array is indexed by TTL value, and as such can contain empty (nil)
+# elements. The first valid element in the array should be at the firsthop
+# ttl and the last will usually be at the TTL of the destination, or the TTL
+# of the last hop probed before giving up due to the gaplimit being reached.
+# When the lastditch gapaction is used however, there can be a large gap in the
+# hops array, with the last element being the responses to the lastditch
+# probes at TTL 255
+#==============================================================================
+class TraceResult
+  
+  attr_reader :target
+  attr_accessor :hops, :stop_reason  
+  def initialize(target, firsthop)
+    @target = target
+    @hops = [] # hash of hops TTL => hop
+    allocate_hop(firsthop)
+  end
+
+  def allocate_hop(ttl)
+    hop = Hop.new(ttl)
+    @hops[ttl-1] = hop
+    return hop
+  end
+
+  def hop_at_ttl(ttl)
+    return @hops[ttl-1]
+  end
+
+  def to_s
+    str = "traceroute to #{@target}\n"
+    @hops.each do |hop|
+      next unless hop && hop.results.length != 0
+      str += hop.to_s
+    end
+    str += "stop reason: #{@stop_reason}\n"
+  end 
+
+  def scamper_to_s
+    str = "traceroute to #{@target}\n"
+    @hops.each do |hop|
+      next unless hop && hop.results.length != 0
+      str += hop.scamper_to_s
+    end
+    str += "stop reason: #{@stop_reason}\n"
+  end
+
+end
+
+#==============================================================================
+# Hop
+#
+# A Hop object is a lightweight wrapper around an array of PingResult objects
+# which are the responses to probes at the given TTL.
+# It also has a to_s method which allows the trace to be printed in an ASCII
+# format which is similar to that used by scamper and bin traceroute. It is
+# slightly more verbose in that it explicitly prints the address of each
+# response on a separate line.
+#==============================================================================
+class Hop
+
+  attr_accessor :ttl, :results, :responsive
+
+  def initialize(ttl)
+    @ttl = ttl
+    @results = []
+    @responsive = true
+  end
+
+  def to_s
+    str = @ttl.to_s
+    str += "\n" if @results.length == 0
+
+    @results.each do |result|
+      if result.responded?
+        str += sprintf("\t%s\t\%.3f ms", result.reply_src, rtt(result))
+        if $options.full
+          if $options.tsps
+            str += sprintf("\t%s", build_tsps_str(result))
+          elsif $options.rr
+            str += sprintf("\t%s", result.reply_rr)
+          end
+        end
+        str += "\n"
+      else
+        str += sprintf("\t*\n")
+      end
+    end
+    return str
+  end
+
+  def scamper_to_s
+    str = @ttl.to_s
+    str += "\n" if @results.length == 0
+    
+    no_responses = true
+
+    sorted = @results.sort {|x, y| x.probe_ipid <=> y.probe_ipid}
+
+    sorted.each do |result|
+      if result.responded?
+        no_responses = false
+        str += sprintf("\t%s\t\%.3f ms\n", result.reply_src, rtt(result))
+      end
+    end
+
+    if no_responses
+      str += sprintf("\t*\n")
+    end
+    return str
+  end
+
+  def build_tsps_str(result)
+    str = ""
+    str += sprintf("%s=%d", result.reply_tsps_ip1, result.reply_tsps_ts1) if 
+      result.reply_tsps_ip1
+    str += sprintf("%s=%d", result.reply_tsps_ip2, result.reply_tsps_ts2) if 
+      result.reply_tsps_ip2
+    str += sprintf("%s=%d", result.reply_tsps_ip3, result.reply_tsps_ts3) if 
+      result.reply_tsps_ip3
+    str += sprintf("%s=%d", result.reply_tsps_ip4, result.reply_tsps_ts4) if 
+      result.reply_tsps_ip4
+    return str
+  end
+
+  def rtt(result)
+    return "-" if !result.responded?
+    tx = Time.at(result.tx_sec, result.tx_usec)
+    rx = Time.at(result.rx_sec, result.rx_usec)
+    (rx-tx) * 1000
+  end
+  
+end
+
+$options.infiles.each do |infile|
+  begin 
+    if infile == "-"
+      fh = $stdin
+    else
+      fh = File.open(infile)
+    end
+    informat = fh.gets.chomp
+
+    if informat == "yaml"
+      loader = YAML
+      $/="\n\n"
+    elsif informat == "binary"
+      loader = Marshal
+      $/=BINARY_RECORD_SEPARATOR
+    else
+      $stderr.puts "FATAL ERROR: Unknown format #{informat} in input "\
+      "file '#{infile}'. skipping..."
+      break
+    end
+
+    fh.gets #discard the initial separator
+
+    fh.each do |object|
+      trace_result = loader.method(:load)[object]
+      next unless trace_result
+      if $options.outformat == "ascii"
+        $options.outfile.print trace_result.to_s
+      elsif $options.outformat == "yaml" || $options.outformat == "binary"
+        $options.outfile.print $options.format.method(:dump)[trace_result]
+      else
+        #bad!
+        $stderr.puts "FATAL ERROR: Unknown format #{$options.outformat} specified"
+        exit -1;
+      end
+      $options.outfile.print $options.record_sep
+    end
+  rescue
+    $stderr.puts $!
+    $stderr.puts "Could not finish converting #{infile}"
+    next
+  end
+end
+
+
