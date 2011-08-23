@@ -132,6 +132,9 @@ typedef struct {
 
     struct udp
     {
+      int rr;
+      char *tsps[4];
+      int tspsc;
       uint16_t dport;
     } om_udp;
 
@@ -148,6 +151,9 @@ typedef struct {
 #define icmp_tspsc options_method_un.om_icmp.tspsc
 #define icmp_cksum options_method_un.om_icmp.cksum
 
+#define udp_rr     options_method_un.om_udp.rr
+#define udp_tsps   options_method_un.om_udp.tsps
+#define udp_tspsc  options_method_un.om_udp.tspsc
 #define udp_dport  options_method_un.om_udp.dport
 
 #define tcp_dport  options_method_un.om_tcp.dport
@@ -173,7 +179,9 @@ typedef struct {
 #define OPT_ICMP_TSPS  0x00000200
 #define OPT_ICMP_CKSUM 0x00000400
 
-#define OPT_UDP_DPORT  0x00001000
+#define OPT_UDP_RR     0x00001000
+#define OPT_UDP_TSPS   0x00002000
+#define OPT_UDP_DPORT  0x00004000
 
 #define OPT_TCP_DPORT  0x00010000
 
@@ -1025,7 +1033,39 @@ static int process_options(VALUE options, int probe_method,
       /* udp options */
       else if(probe_method == MPERIO_PING_METHOD_UDP)
 	{
-	  if(opt_type == sym_dport)
+	  if(opt_type == sym_rr)
+	    {
+	      if(!CHECK_PARSE_INT(options_out->udp_rr, int, opt) ||
+		 (options_out->udp_rr != 0 && options_out->udp_rr != 1))
+		{
+		  *err_msg = "udp_rr must be 0 (off) or 1 (on)";
+		  goto err;
+		}
+	      SET_OPT_FLAG(options_out, OPT_UDP_RR);
+	    }
+	  else if(opt_type == sym_tsps)
+	    {
+	      if(rb_type(opt) == T_ARRAY)
+		{
+		  rtsps = RARRAY_PTR(opt);
+		  options_out->udp_tspsc = RARRAY_LEN(opt);
+		  if(options_out->udp_tspsc > 4)
+		    {
+		      *err_msg = "max allowed tsps ips is 4";
+		      goto err;
+		    }
+		  for(j=0;j<options_out->udp_tspsc;j++)
+		    {
+		      if(!CHECK_PARSE_STR(options_out->udp_tsps[j], rtsps[j]))
+			{
+			  *err_msg = "tsps ip must be an address string";
+			  goto err;
+			}
+		    }
+		  SET_OPT_FLAG(options_out, OPT_UDP_TSPS);
+		}
+	    }
+	  else if(opt_type == sym_dport)
 	    {
 	      if(!CHECK_PARSE_INT(options_out->udp_dport, uint16_t, opt))
 		{
@@ -1319,6 +1359,7 @@ mperio_ping_udp(int argc, VALUE *argv, VALUE self)
   mperio_data_t *data = NULL;
   const char *msg = NULL;
   size_t msg_len = 0;
+  int i;
   int opt_cnt = 3; /*the first optional option */
 
   Data_Get_Struct(self, mperio_data_t, data);
@@ -1346,6 +1387,45 @@ mperio_ping_udp(int argc, VALUE *argv, VALUE self)
   opt_cnt = load_common_options(data, opt_cnt, &options);
 
   /* udp specific options */
+  if((options.flags & OPT_UDP_RR) != 0)
+    {
+      SET_UINT_CWORD(data->words, opt_cnt, RR, options.udp_rr);
+      opt_cnt++;
+    }
+
+  if((options.flags & OPT_UDP_TSPS) != 0)
+    {
+      for(i=0;i<options.udp_tspsc;i++)
+	{
+	  switch (i) 
+	    {
+	    case 0:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP1, 
+				options.udp_tsps[i]);
+	      opt_cnt++;
+	      break;
+	      
+	    case 1:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP2, 
+				options.udp_tsps[i]);
+	      opt_cnt++;
+	      break;
+	      
+	    case 2:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP3, 
+				options.udp_tsps[i]);
+	      opt_cnt++;
+	      break;
+
+	    case 3:
+	      SET_ADDRESS_CWORD(data->words, opt_cnt, TSPS_IP4, 
+				options.udp_tsps[i]);
+	      opt_cnt++;
+	      break;
+	    }
+	}
+    }
+
   if((options.flags & OPT_UDP_DPORT) != 0)
     {
       SET_UINT_CWORD(data->words, opt_cnt, DPORT, options.udp_dport);
