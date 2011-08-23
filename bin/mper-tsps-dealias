@@ -132,6 +132,7 @@ $stdout.sync = true
 $options = OpenStruct.new
 $options.spacing = 0
 $options.log_path = nil  # disable logging by default
+$options.probe_method = :icmp
 
 REPEAT = 5
 
@@ -176,6 +177,18 @@ end
 
 opts.on("-l", "--log=PATH", "mper command/result message log path") do |v|
   $options.log_path = v
+end
+
+opts.on("-P", "--probe-method=METHOD", String,
+        "the probing method to use - icmp (default) or udp") do |v|
+  if v == "icmp"
+    $options.probe_method = :icmp
+  elsif v == "udp"
+    $options.probe_method = :udp
+  else
+    $stderr.puts "invalid probe method (#{v})"
+    raise OptionParser::ParseError
+  end
 end
 
 opts.on_tail("-?", "--help", "show this message") do
@@ -401,8 +414,15 @@ class TspsDealiasManager
     #  printf "probing (%s|%s) @ %d\n", probe.dest, tsps_ips_s, probe.id 
     # end
     @pending_probes[probe.id] = probe
-    @mperio.ping_icmp probe.id, probe.dest, 
-      :spacing, $options.spacing, :tsps, probe.tsps_ips
+    if $options.probe_method == :icmp
+      @mperio.ping_icmp(probe.id, probe.dest, 
+                        :spacing, $options.spacing, 
+                        :tsps, probe.tsps_ips)
+    else
+      @mperio.ping_udp(probe.id, probe.dest,
+                       :spacing, $options.spacing,
+                       :tsps, probe.tsps_ips)
+    end
   end
   
   ####
