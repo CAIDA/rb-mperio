@@ -27,7 +27,7 @@
 ##     FNSx => Fail, No Stamp
 ##     FNRx => Fail, No Reply
 ##     FESx => Fail, Extra Stamp
-##     FVSx => Fail, Varying Stamps (multiple stamping behaviours were oberved)
+##     FVSx => Fail, Varying Stamps (multiple stamping behaviours were observed)
 ##      (where x is the number of probes that were replied to)
 ## 
 ## <alias_validity_check> OPTIONAL
@@ -47,7 +47,7 @@
 ##     FRD  => Fail, Reverse path Decrement (interface is on the reverse path,
 ##                                           timestamps decremented)
 ##     FRG  => Fail, Reverse path Gap (interface is on the reverse path,
-##                                     gap between timestamps
+##                                     gap between timestamps)
 ##     FRU  => Fail, Reverse path Unknown (interface *probably* on the reverse 
 ##                                         path, inconclusive timestamps)
 ##
@@ -102,6 +102,7 @@
 ## 
 ##   Possible values are:
 ##     ALIAS            => Confirmed as aliases.
+##     ALIAS-STRONG     => Confirmed as aliases using the distance check also.
 ##     NOALIAS-WEAK     => Low-confidence non-aliases
 ##     NOALIAS-STRONG   => High-confidence non-aliases
 ##     UNKNOWN          => A determination could not be made.
@@ -163,7 +164,7 @@ opts.on("-n", "--concurrency=NUM", Integer,
 end
 
 opts.on("-s", "--spacing=NUM", Integer,
-        "spacing (sec) between probes (default: #{$options.spacing})") do |v|
+        "spacing (ms) between probes (default: #{$options.spacing})") do |v|
   $options.spacing = v
 end
 
@@ -682,11 +683,11 @@ class TspsDealiasSuitabilityTask
         @suit_b_passed = @subtask.passed
       end
       @state = :done
-      if !@dealias_result.overall
-        @dealias_result.overall = "INELIGIBLE"
-      end
       @passed = @candidates[1] ? @suit_a_passed && @suit_b_passed : 
         @suit_a_passed
+      if !@dealias_result.overall && !@passed
+        @dealias_result.overall = "INELIGIBLE"
+      end
       return true
     else
       return false
@@ -1649,14 +1650,14 @@ class TspsDealiasDistanceLoopTask
       if @ipa_ttl != @ipb_ttl
         log(@err_message + "A(#{@ipa_ttl}) and B(#{@ipb_ttl}) not equidistant")
         @dealias_result.distance_loop = "FDI"
-        @dealias_result.overall = "UNKNOWN-NOALIAS"
+        @dealias_result.overall = "ALIAS"
         @state = :done
         return
       end
 
       log(@message + " passed (A(#{@ipa_ttl}) == B=(#{@ipb_ttl}))")
       @dealias_result.distance_loop = "PDI"
-      @dealias_result.overall = "ALIAS"
+      @dealias_result.overall = "ALIAS-STRONG"
       @state = :done
       return
     end
