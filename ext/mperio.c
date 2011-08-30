@@ -208,7 +208,7 @@ static ID iv_delegate, iv_reqnum, iv_responded, iv_probe_src, iv_probe_dest;
 static ID iv_udata, iv_tx_sec, iv_tx_usec, iv_rx_sec, iv_rx_usec;
 static ID iv_probe_ttl, iv_probe_ipid, iv_reply_src, iv_reply_ttl;
 static ID iv_reply_qttl, iv_reply_ipid, iv_reply_icmp, iv_reply_tcp;
-static ID iv_reply_rr;
+static ID iv_reply_ipopt_cmp, iv_reply_rr;
 static ID iv_reply_tsps_ts1, iv_reply_tsps_ip1;
 static ID iv_reply_tsps_ts2, iv_reply_tsps_ip2;
 static ID iv_reply_tsps_ts3, iv_reply_tsps_ip3;
@@ -453,6 +453,10 @@ handle_mper_ping_response(mperio_data_t *data, const control_word_t *resp_words,
 
     case KC_REPLY_TCP_OPT:
       rb_ivar_set(result, iv_reply_tcp, ULONG2NUM(resp_words[i].cw_uint));
+      break;
+
+    case KC_REPLY_IPOPT_CMP_OPT:
+      rb_ivar_set(result, iv_reply_ipopt_cmp, ULONG2NUM(resp_words[i].cw_uint));
       break;
 
     case KC_REPLY_RR_OPT:
@@ -1680,6 +1684,7 @@ Init_mperio(void)
   IV_INTERN(reply_src);
   IV_INTERN(reply_ttl);
   IV_INTERN(reply_qttl);
+  IV_INTERN(reply_ipopt_cmp);
   IV_INTERN(reply_rr);
   IV_INTERN(reply_tsps_ts1);
   IV_INTERN(reply_tsps_ip1);
