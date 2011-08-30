@@ -1771,9 +1771,7 @@ end
 def dump_replies(dealias_result, type_str, probes)
   probes.each do |probe|
     result = probe.result
-    if result.reply_ipopt_cmp && result.reply_ipopt_cmp != 0
-      ts_str = "STRIPPED"
-    elsif result.reply_tsps_ip1
+    if result.reply_tsps_ip1
       ts_str = result.reply_tsps_ip1 + "=" + result.reply_tsps_ts1.to_s
       if result.reply_tsps_ip2
         ts_str += "," + result.reply_tsps_ip2 + "=" + 
@@ -1789,6 +1787,9 @@ def dump_replies(dealias_result, type_str, probes)
       end
     else
       ts_str = "-"
+    end
+    if result.reply_ipopt_cmp && result.reply_ipopt_cmp != 0
+      ts_str += ",ALTERED"
     end
     # dest|type_str|ts_str|reply_ttl|rtt
     dealias_result.verbose << sprintf("< %s,%s|%s|%s|%s|%s\n", 
