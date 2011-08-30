@@ -571,7 +571,7 @@ class DealiasResult
   end
   
   def to_s
-    dump_verbose() if $options.verbose
+    dump_verbose() if $options.full
     @alias_validity_check[0] = "-" unless @alias_validity_check[0]
     @alias_validity_check[1] = "-" unless @alias_validity_check[1]
     result = sprintf("%s,%s|%s,%s|%s,%s|%s|%s|%s|%s|%s", 
@@ -1758,7 +1758,7 @@ def count_stamps(result)
 end
 
 def log(message)
-  $stderr.puts message if $options.full
+  $stderr.puts message if $options.verbose
 end
 
 def rtt(result)
