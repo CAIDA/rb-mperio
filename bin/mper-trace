@@ -55,7 +55,7 @@ $options.outformat = "ascii"
 opts = OptionParser.new
 
 opts.banner="usage: #{$0} [-?fv] [-n concurrency] [-s spacing] [-l logfile]\n"\
- + " " * $0.to_s.length + "        -p mperport -c candidatefile | IPa IPb"
+ + " " * $0.to_s.length + "        -D mperport -c candidatefile | IPa IPb"
 
 opts.on("-a", "--attempts=NUM", Integer,
          "specifies the maximum number of attempts to obtain a response " \
