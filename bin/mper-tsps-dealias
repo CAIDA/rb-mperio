@@ -88,7 +88,7 @@
 ##     F90  => Fail, less than 90% stamp consistency
 ##
 ## <distance_loop> OPTIONAL
-##   The distance/loop test is only preformed if the shared clock test is
+##   The distance test is only preformed if the shared clock test is
 ##   passed with the PSC flag.
 ##
 ##   Possible values are:
@@ -102,6 +102,7 @@
 ## 
 ##   Possible values are:
 ##     ALIAS            => Confirmed as aliases.
+##     ALIAS-WEAK       => Confirmed as aliases using the weak distance check
 ##     ALIAS-STRONG     => Confirmed as aliases using the distance check also.
 ##     NOALIAS-WEAK     => Low-confidence non-aliases
 ##     NOALIAS-STRONG   => High-confidence non-aliases
@@ -346,7 +347,7 @@ class Probe
   end
 
   def to_s
-    "Probe #{id}: (#{dest}|#{tsps_ips.join(',')})"
+    "Probe #{id}: (#{dest}|#{tsps_ips ? tsps_ips.join(',') : ""})"
   end
     
 end
@@ -910,9 +911,9 @@ class TspsDealiasAliasCheckTask
     if @state == :shared_clock
       if @subtask.is_complete
         if @subtask.passed
-          @subtask = TspsDealiasDistanceLoopTask.new((@probes_a | @probes_b), 
-                                                     @ipa, @ipb,
-                                                     @dealias_result)
+          @subtask = TspsDealiasDistanceTask.new(# (@probes_a | @probes_b), 
+                                                 @ipa, @ipb,
+                                                 @dealias_result)
           @state = :distance_loop
         else
           return true
@@ -1205,33 +1206,44 @@ class TspsDealiasRetPathCheckTask
     if @state == :probe
         return false
     end
+    if @state == :distance_loop
+      @state = :done if @subtask.is_complete
+    end
     if @state == :done
       return true
     end
   end
 
   def next_probe
-    if @probe_queue.length == 0 && @pending_probes == 0
-      # get the probes
-      log("#{@ipa},#{@ipb}: " +
-          "\tchecking for #{@ipa} in the path to #{@ipb} (A|BABA)")
-      @probe_queue = repeat_add(@ipb, [@ipa, @ipb, @ipa, @ipb])
+    if @state == :probe
+      if @probe_queue.length == 0 && @pending_probes == 0
+        # get the probes
+        log("#{@ipa},#{@ipb}: " +
+            "\tchecking for #{@ipa} in the path to #{@ipb} (A|BABA)")
+        @probe_queue = repeat_add(@ipb, [@ipa, @ipb, @ipa, @ipb])
+      end
+      probe = @probe_queue.shift
+      @pending_probes += 1 if probe
+      return probe
+    else
+       return @subtask.next_probe
     end
-    probe = @probe_queue.shift
-    @pending_probes += 1 if probe
-    return probe
   end
 
   def receive_probe(probe)
     unless probe
       return
     end
-    @replies << probe
-    @pending_probes -= 1
-    
-    if @replies.length == REPEAT
-      process_reply_probes(@replies)
-      @replies = []
+    if @state == :probe
+      @replies << probe
+      @pending_probes -= 1
+      
+      if @replies.length == REPEAT
+        process_reply_probes(@replies)
+        @replies = []
+      end
+    else
+      @subtask.receive_probe(probe)
     end
   end
   
@@ -1258,13 +1270,25 @@ class TspsDealiasRetPathCheckTask
     if stamp_types[:no_stamp] > 0
       log(@err_message + "(no stamps)")
       @dealias_result.ret_path = "FNS"
-      @dealias_result.overall = "UNKNOWN-NOALIAS"
+      # @dealias_result.overall = "UNKNOWN-NOALIAS"
+      # send to the distance check
+      @subtask = TspsDealiasDistanceTask.new(# (@probes_a | @probes_b), 
+                                                 @ipa, @ipb,
+                                                 @dealias_result)
+      @state = :distance_loop
+      return
     end
 
     if stamp_types[:one_stamp] > 0 
       log(@err_message + "(one stamp)")
       @dealias_result.ret_path = "F1S"
-      @dealias_result.overall = "ERROR"
+      # @dealias_result.overall = "ERROR"
+      # send to the distance check
+      @subtask = TspsDealiasDistanceTask.new(# (@probes_a | @probes_b), 
+                                                 @ipa, @ipb,
+                                                 @dealias_result)
+      @state = :distance_loop
+      return
     end
 
     if stamp_types[:two_stamps] > 0
@@ -1568,12 +1592,12 @@ class TspsDealiasSharedClockTask
 
 end #TspsDealiaSharedClockTask
 
-class TspsDealiasDistanceLoopTask
+class TspsDealiasDistanceTask
 
   attr_reader :is_complete
   
-  def initialize(probes, ipa, ipb, dealias_result)
-    @probes = probes
+  def initialize(ipa, ipb, dealias_result)
+    # @probes = probes
     @ipa = ipa
     @ipb = ipb
     @dealias_result = dealias_result
@@ -1589,7 +1613,7 @@ class TspsDealiasDistanceLoopTask
     @state = :probe_ipa
     # states: :probe_ipa, :probe_ipb, :done
 
-    @message = "#{@ipa},#{@ipb}: distance/loop check"
+    @message = "#{@ipa},#{@ipb}: distance check"
     @err_message = @message + " failed "
     log(@message)
   end
@@ -1650,14 +1674,22 @@ class TspsDealiasDistanceLoopTask
       if @ipa_ttl != @ipb_ttl
         log(@err_message + "A(#{@ipa_ttl}) and B(#{@ipb_ttl}) not equidistant")
         @dealias_result.distance_loop = "FDI"
-        @dealias_result.overall = "ALIAS"
+        if @dealias_result.ret_path
+          @dealias_result.overall = "UNKNOWN"
+        else
+          @dealias_result.overall = "ALIAS"
+        end
         @state = :done
         return
       end
 
       log(@message + " passed (A(#{@ipa_ttl}) == B=(#{@ipb_ttl}))")
       @dealias_result.distance_loop = "PDI"
-      @dealias_result.overall = "ALIAS-STRONG"
+      if @dealias_result.ret_path
+        @dealias_result.overall = "ALIAS-WEAK"
+      else
+        @dealias_result.overall = "ALIAS-STRONG"
+      end
       @state = :done
       return
     end
@@ -1692,7 +1724,7 @@ class TspsDealiasDistanceLoopTask
     return ttl
   end
 
-end #TspsDealiasDistanceLoopTask
+end #TspsDealiasDistanceTask
 
 #################################################################################
 # STATIC HELPER METHODS
