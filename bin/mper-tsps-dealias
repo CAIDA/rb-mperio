@@ -141,7 +141,8 @@ REPEAT = 5
 opts = OptionParser.new
 
 opts.banner="usage: #{$0} [-?fv] [-n concurrency] [-s spacing] [-l logfile]\n"\
- + " " * $0.to_s.length + "        -p mperport -c candidatefile | IPa IPb"
+ + " " * $0.to_s.length + "        [-P probe-method] -p mperport \n"\
+ + " " * $0.to_s.length + "        -c candidates | -b suit-results | IPa IPb"
 
 opts.on("-p", "--mper-port=NUM", Integer,
 	"mper control socket port (REQUIRED)") do |v|
