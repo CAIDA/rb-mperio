@@ -1,0 +1,523 @@
+Implements the IP Prespecified Timestamp dealias method described in
+"Resolving IP Aliases with Prespecified Timestamps", Sherry et al., IMC'10
+
+Usage
+-----
+
+usage: ./mper-tsps-dealias-dev [-?fv] [-n concurrency] [-s spacing] [-l logfile]
+                               [-P probe-method] -p mperport 
+                               -c candidates | -b suit-results | IPa IPb
+    -p, --mper-port=NUM              mper control socket port (REQUIRED)
+    -c, --candidates=PATH            file with candidate pair information
+    -b, --suitability-results=PATH   file with results of suitability checking
+    -n, --concurrency=NUM            max pairs to dealias concurrently (default: unlimited)
+    -s, --spacing=NUM                spacing (ms) between probes (default: 0)
+    -f, --full                       show full result output
+    -v, --[no-]verbose               show detailed progress
+    -l, --log=PATH                   mper command/result message log path
+    -P, --probe-method=METHOD        the probing method to use - icmp (default) or udp
+    -?, --help                       show this message
+
+The tool has three probing modes; full-dealiasing, suitability checking and
+educated-dealiasing.
+
+The most common, and simple, is full dealiasing, where a pair (or multiple
+pairs) of candidate addresses are provided and the tool attempts to determine if
+they are aliases.
+
+The other modes split the algorithm into two pieces; the first of which is
+referred to as "Suitability Checking". Suitability checking only requires one
+address and it attempts to determine if the address is a viable candidate for
+dealiasing using prespecified timestamps. Once an address has been run through
+the suitability checking logic, it is classified as INELIGIBLE (meaning that it
+cannot be used at all for dealiasing), or as one of three pass types (two, three
+or four stamps). These results can be used with some additional heuristics to
+help determine which pairs should be probed with the remainder of the dealiasing
+algorithm using the "Educated Dealiasing" mode. 
+
+The educated dealiasing mode takes post-processed suitability results and uses
+them to bypass some of the initial probing usually needed when naively
+dealiasing a pair of addresses. To make use of this, the suitability results for
+the desired candidate pair should be combined into the standard output format
+(as described below) and passed to the tool using the --suitability-results
+option. This will force the tool to use the given suitability results and move
+directly to the alias validity check. Note that care should be taken when doing
+this as the stamping behavior may change over time so the two steps should be
+done as close together as possible.
+
+There are two ways to provide candidate addresses to the tool; explicitly on the
+command line, or in a candidate list file.
+
+If providing pairs, the tool accepts two formats; space separated and comma
+separated. For example, "130.217.250.13 130.217.250.15" or
+"130.217.250.13,130.217.250.15".
+
+If these are given in a candidate file, there must be one pair per line. If a
+single address is given per line, the tool will perform only the suitability
+check as described above.
+
+The tool can also accept space separated and comma separated pairs on the
+command line, but if space separated pairs are given, the tool will generate
+candidate pairs by moving left to right. For example, "A B C D" will create two
+pairs, "A,B C,D". As with the candidate file, if only one address is given it
+will be used as a suitability-only candidate. There is a subtle difference here
+when compared to the candidate file; if an odd number of space-separated
+addresses are given, the last address will only have the suitability check run
+as the tool cannot determine which address to pair it with. 
+
+Output Format
+-------------
+
+In the normal mode, there is one line of output for each pair of candidate 
+addresses (IPa,IPb), as follows:
+<candidate_pair>|<suitability_check>|<alias_validity_check|<reverse_path> \
+  <alias_check>|<shared_clk>|<distance_loop>|<overall>
+
+The structure and possible values in each section are listed below:
+
+<candidate_pair> MANDATORY
+  IPa,IPb
+  e.g. 192.168.1.1,192.168.1.2
+
+<suitability_check> MANDATORY
+  <result>,<result>
+  The suitability check is performed on each address.
+  
+  The possible result values are:
+    P4Sx => Pass, 4 Stamps
+    P3Sx => Pass, 3 Stamps
+    P2Sx => Pass, 2 Stamps
+    F1Sx => Fail, One Stamp
+    FNSx => Fail, No Stamp
+    FNRx => Fail, No Reply
+    FESx => Fail, Extra Stamp
+    FVSx => Fail, Varying Stamps (multiple stamping behaviours were observed)
+     (where x is the number of probes that were replied to)
+
+<alias_validity_check> OPTIONAL
+  <result>,<result>
+  The alias validity check is only performed if both IPa and IPb pass the 
+  suitability check.
+
+  Possible values are:
+    P2S  => Pass, Two Stamps
+    P3S  => Pass, Three Stamps (weeded out in alias check)
+    P4S  => Pass, Four Stamps
+    FNR  => Fail, No Reply 
+    F1S  => Fail, One Stamp
+    FN   => Fail, No Stamps
+    FVS  => Fail, Varying Stamps (multiple stamping behaviours were 
+                                     observed)
+    FRD  => Fail, Reverse path Decrement (interface is on the reverse path,
+                                          timestamps decremented)
+    FRG  => Fail, Reverse path Gap (interface is on the reverse path,
+                                    gap between timestamps)
+    FRU  => Fail, Reverse path Unknown (interface *probably* on the reverse 
+                                        path, inconclusive timestamps)
+
+<reverse_path> OPTIONAL
+  The reverse path check is only performed if 
+  (IPa==P2S && IPb==F1S) || (IPa==F1S && IPb==P2S)
+  Works by probing the P2S interface (A) with (A|BABA) to determine if B
+  is in fact in the return path from A.
+
+  Possible values are:
+    FNR     => Fail, No Reply
+    FVS     => Fail, Varying Stamps
+    FNS     => Not enough data to make a conclusion (UNKNOWN-NOALIAS)
+    F1S     => Should not happen (load balancing?) (ERROR)
+    F2[DGU] => A is in the fwd path, but not reverse? (see FR* above)
+    F3[DGU] => A is in both fwd and reverse path (see FR* above)
+    F4S     => Should not happen (ERROR)
+
+<alias_check> OPTIONAL
+  The alias check is only performed if both IPa and IPb pass the 
+  validity check
+
+  Possible values are:
+    P2S => Pass, Two Stamps
+    P4S => Pass, Four Stamps (indicates an alias)
+    F3S => Fail, Three Stamps (an error condition)
+    FIR => Fail, Insufficient Stamps (50% total replies are required)
+
+<shared_clk> OPTIONAL
+  The shared clock test is only performed if the alias check test is
+  passed with the PTS flag, indicating that the replies were stamped
+  twice.
+
+  Possible values are:
+    PSC  => Pass, Shared Clock
+    PME  => Pass, Midnight/Epoch
+    FDT  => Fail, Decreasing Timestamp
+    F90  => Fail, less than 90% stamp consistency
+
+<distance_loop> OPTIONAL
+  The distance test is only preformed if the shared clock test is
+  passed with the PSC flag.
+
+  Possible values are:
+    PDI  => Pass, Distance
+    FNRx => Fail, No Reply (where x is the number of noreplies)
+    FTV  => Fail, TTL Variance (within the probes to a single interface)
+
+<overall> MANDATORY
+  The overall value is the end result of performing the dealias algorithm
+  on the candidate pair.
+
+  Possible values are:
+    ALIAS            => Confirmed as aliases.
+    ALIAS-WEAK       => Confirmed as aliases using the weak distance check
+    ALIAS-STRONG     => Confirmed as aliases using the distance check also.
+    NOALIAS-WEAK     => Low-confidence non-aliases
+    NOALIAS-STRONG   => High-confidence non-aliases
+    UNKNOWN          => A determination could not be made.
+    UNKNOWN-REPROBE  => Could potentially be resolved by reprobing.
+    UNKNOWN-ALIAS    => Are probably aliases but cannot be confirmed.
+    UNKNOWN-NOALIAS  => Are probably not aliases but cannot be confirmed
+    INELIGIBLE => The candidate interfaces were not suitable for this
+                  technique.
+    ERROR      => An unexpected result not handled by the algorithm.
+
+If the --full mode is specified, additional lines will be output by the tool 
+showing the full details for each probe response that is received.
+The format of these lines is as follows:
+
+"< <candidates>|<desitnation>|<type>|<timestamps>|<reply_ttl>|<rtt>"
+
+Note that the leading '<' is an explicit character to indicate this was a reply
+received by the tool (in keeping with the convention used by mper-ping).
+
+<candidates> MANDATORY
+  These are an A,B pair which indicates the two addresses that were used in the
+  probe. Note that these do not necessarily match the A and B of the candidate
+  pair.
+
+<destination>|<type> MANDATORY
+  Indicates which (A or B) address the probe was targeted to, and also the
+  format of the prespecified addresses loaded into the timestamp option.
+
+  e.g. for the dealiasing, this could be A|ABAB
+
+<timestamps> MANDATORY
+  Gives the stamps that were in the response to the probe. All interfaces and
+  stamps up to the pointer in the option are listed. If mper is able to detect a
+  change in the options included in the reply (for example if options are
+  stripped from the packet), then it will append "ALTERED" to the list of
+  timestamps.
+
+  The format for these stamps are as follows:
+  <TS IP 1>=<TS STAMP 1>,<TS IP 2>=<TS STAMP 2>,<TS IP 3>=<TS STAMP 3>,
+      <TS IP 4>=<TS STAMP 4>[,ALTERED]
+
+<reply_ttl>
+  Gives the ttl of the response packet
+
+<rtt>
+  Gives the round trip time for the probe
+
+
+Differences from the original algorithm
+---------------------------------------
+
+The dealiasing process and classification implemented in this tool differs
+slightly from the original algorithm described by Sherry et al.. 
+
+As outlined in the above OUTPUT FORMAT section, we provide a total of 11 overall
+outcomes from dealising whereas the original algorithm only describes three
+(alias, non-alias and unknown). These come as a result of investigating the
+causes of the various behaviors, and so we can give more specific
+results.
+We split the alias category into ALIAS, ALIAS-WEAK and ALIAS-STRONG. As the
+names indicate, these are are all aliases, but the tool has been able to give
+some indication of the confidence of the classification. Similar sub-categories
+are used for NOALIAS also.
+The UNKNOWN category is split into UNKNOWN, UNKNOWN-REPROBE, UNKNOWN-ALIAS,
+UNKNWON-NOALIAS. UNKNOWN indicates that the tool is not able to make any
+determination of the pair of addresses. UNKNOWN-REPROBE indicates that the
+results of probing are possibly transient and simply re-running the tool *may*
+allow a determination to be made. UNKNOWN-ALIAS indicates that the tool is not
+able to make a determination whether the addresses are aliases, but it suspects
+that they may be. Similarly, UNKNWON-NOALIAS indicates a inability to classify
+the addresses, but they may not be aliases.
+
+There are also additional heuristics we have developed to detect cases where the
+addresses appear to be aliases, but one is actually on the reverse path from the
+other. These are the only cases where we declare non-aliases.
+
+In the original description of the algorithm, the reverse path distance check
+was performed only when one address returned two stamps to (A|ABAB) and the
+other returned one stamp. We perform this check even when both addresses return
+two stamps to give an even stronger alias result. A failure of the test will not
+result in a non-alias being declared (the overall result will be ALIAS), but a
+pass will result in an overall classification of ALIAS-STRONG.
+
+Overall Statistics
+------------------
+
+A script to carry out some basic overall analysis of a dealiasing run is
+included in this release.
+
+The script takes the mper-tsps-dealias results output and generates statistics
+for each of the sub-components that are described in the "Output Format" section
+above.
+
+The abbreviated codes given in the "Output Format" section are expanded as
+follows:
+
+Raw Code	Stats Label
+------------------------------
+FNR 		Unresponsive
+FVS		Inconsistent
+FES		Extra Stamp
+FNS		Zero Stamps
+F1S		One Stamp
+P2S		Two Stamps
+P3S		Three Stamps
+P4S		Four Stamps
+
+FR[DGU]		Reverse Path
+
+Sample output for a dealiasing run with 202,409 pairs is shown below.
+
+--------------------------------------------------------------------------------
+
+Total candidate pairs: 202409
+Total interfaces tested for suitability: 404818
+
+Suitability Stats:
+Probing for (D|DXXX) and (D|DDDD)
+Classification	# IPs	% of IPs
+======|FAILURE CONDITIONS|======
+Unresponsive	149725	36.99%
+Inconsistent	50972	12.59%
+Extra Stamp	1282	0.32%
+Zero Stamps	69983	17.29%
+One Stamp	61186	15.11%
+=======|PASS CONDITIONS|========
+Two Stamps	23150	5.72%
+Three Stamps	35	0.01%
+Four Stamps	48485	11.98%
+--------------------------------
+TOTAL		404818	100%
+================================
+Number of pairs which passed suitability check: 23818
+
+
+Probe Response Stats:
+Resp/Atmpt	Frequency
+------------------------
+0/5		145757	*
+1/5		3968	* both included in 'Unresponsive' count above
+2/5		4332
+3/5		5846
+4/5		8181
+5/5		236734
+
+Alias Validity Check Stats:
+Probing (A|ABAB) for each IP
+Classification	# IPs	% of IPs
+======|FAILURE CONDITIONS|======
+Unresponsive	20	0.04%
+Inconsistent	31	0.07%
+No Stamp	0	0.00%
+One Stamp	2566	5.39%
+Reverse Path	195	0.41%
+=======|PASS CONDITIONS|========
+Two Stamp	1362	2.86%
+Three Stamp	24	0.05%
+Four Stamp	43438	91.19%
+--------------------------------
+TOTAL		47636	100%
+================================
+Number of pairs which passed validity check: 22388
+
+
+===STATS BELOW HERE ARE FOR PAIRS===
+
+
+Return Path Check Stats:
+Probing (A|BABA)
+Classification	# Pairs	% of Pairs
+======|FAILURE CONDITIONS|======
+Unresponsive	0	0.00%
+Inconsistent	0	0.00%
+No Stamp	0	0.00%
+1 Stamp (ERR)	5	45.45%
+2 Stamp (UNK)	1	9.09%
+3 Stamp (NON)	5	45.45%
+4 Stamp (ERR)	0	0.00%
+--------------------------------
+TOTAL		11	100%
+================================
+
+
+Alias Check Stats:
+Probing (A|ABAB) and (B|BABA)
+Classification	# Pairs	% of Pairs
+======|FAILURE CONDITIONS|======
+<5 Replies	45	0.20%
+Three Stamps	0	0.00%
+=======|PASS CONDITIONS|========
+Two Stamps	673	3.01%
+Four Stamps	21655	96.79%
+--------------------------------
+TOTAL		22373	100%
+================================
+
+Shared Clock Check Stats:
+Timestamps from (A|ABAB) and (B|BABA)
+Classification	# Pairs	% of Pairs
+======|FAILURE CONDITIONS|======
+Decreasing TS	0	0.00%
+TS Variance	30	4.46%
+=======|PASS CONDITIONS|========
+Shared Clock	447	66.42%
+Midnight/Epoch	196	29.12%
+--------------------------------
+TOTAL		673	100%
+================================
+
+Distance/Loop Check Stats:
+Classification	# Pairs	% of Pairs
+======|FAILURE CONDITIONS|======
+Unresponsive	3	0.47%
+TTL Variance	8	1.24%
+Distance	32	4.98%
+=======|PASS CONDITIONS|========
+Distance	600	93.31%
+--------------------------------
+TOTAL		643	100%
+================================
+
+Overall Verdicts:
+Classification	# Pairs	% of Pairs
+=========|FAILURE CONDITIONS|=========
+Non-Alias		200	0.10%
+Ineligible		175804	86.86%
+Unknown			0	0.00%
+Unknown Reprobe		4082	2.02%
+Unknown Alias		0	0.00%
+Unknown Non-Alias	63	0.03%
+Error			5	0.00%
+==========|PASS CONDITIONS|===========
+Alias			22255	11.00%
+--------------------------------------
+TOTAL			202409	100%
+======================================
+
+--------------------------------------------------------------------------------
+Additional histograms which are displayed when the script is called with the
+--histogram option:
+
+
+Pairs which contain one pass interface and one fail interface:
+P2S		21592	89.84%
+	F1S	13488	56.12%
+	FNS	4694	19.53%
+	FNR	2088	8.69%
+	FVS	1301	5.41%
+	FES	21	0.09%
+
+P3S		9	0.04%
+	FNR	5	0.02%
+	F1S	3	0.01%
+	FNS	1	0.00%
+
+P4S		2433	10.12%
+	FNR	1886	7.85%
+	FNS	485	2.02%
+	F1S	36	0.15%
+	FVS	16	0.07%
+	FES	10	0.04%
+
+
+Pairings which pass suitability check:
+P2S		788	3.31%
+	P2S	770	3.23%
+	P4S	16	0.07%
+	P3S	2	0.01%
+
+P3S		12	0.05%
+	P3S	12	0.05%
+
+P4S		23018	96.64%
+	P4S	23018	96.64%
+
+Mapping from Suitability result to AVC result:
+Suit A	AVC A	Suit B	AVC B	Count	%
+P2S				1558	3.27%
+	P2S			1362	87.42%
+		P2S		1355	99.49%
+			P2S	1346	99.34%
+			F1S	6	0.44%
+			FVS	2	0.15%
+			FNR	1	0.07%
+		P4S		5	0.37%
+			F1S	3	60.00%
+			FRP	2	40.00%
+		P3S		2	0.15%
+			F1S	2	100.00%
+	F1S			184	11.81%
+		P2S		174	94.57%
+			F1S	164	94.25%
+			P2S	6	3.45%
+			FVS	3	1.72%
+			FNR	1	0.57%
+		P4S		10	5.43%
+			F1S	9	90.00%
+			P4S	1	10.00%
+	FVS			10	0.64%
+		P2S		9	90.00%
+			FVS	4	44.44%
+			F1S	3	33.33%
+			P2S	2	22.22%
+		P4S		1	10.00%
+			F1S	1	100.00%
+	FNR			2	0.13%
+		P2S		2	100.00%
+			P2S	1	50.00%
+			F1S	1	50.00%
+
+P3S				26	0.05%
+	P3S			24	92.31%
+		P3S		24	100.00%
+			P3S	24	100.00%
+	F1S			2	7.69%
+		P2S		2	100.00%
+			P2S	2	100.00%
+
+P4S				46052	96.67%
+	P4S			43438	94.32%
+		P4S		43437	100.00%
+			P4S	43400	99.91%
+			FNR	17	0.04%
+			F1S	15	0.03%
+			FVS	4	0.01%
+			FRP	1	0.00%
+		P2S		1	0.00%
+			F1S	1	100.00%
+	FRP			195	0.42%
+		P4S		193	98.97%
+			F1S	192	99.48%
+			P4S	1	0.52%
+		P2S		2	1.03%
+			P2S	2	100.00%
+	FVS			21	0.05%
+		P4S		21	100.00%
+			F1S	17	80.95%
+			P4S	4	19.05%
+	FNR			18	0.04%
+		P4S		18	100.00%
+			P4S	17	94.44%
+			F1S	1	5.56%
+	F1S			2380	5.17%
+		P4S		2367	99.45%
+			F1S	2142	90.49%
+			FRP	192	8.11%
+			FVS	17	0.72%
+			P4S	15	0.63%
+			FNR	1	0.04%
+		P2S		13	0.55%
+			F1S	9	69.23%
+			P2S	3	23.08%
+			FVS	1	7.69%
