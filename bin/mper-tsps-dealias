@@ -60,8 +60,8 @@
 ##   Possible values are:
 ##     FNR     => Fail, No Reply
 ##     FVS     => Fail, Varying Stamps
-##     FNS     => Not enough data to make a conclusion (UNKNOWN-NOALIAS)
-##     F1S     => Should not happen (load balancing?) (ERROR)
+##     PNS     => Not on the reverse path. Sent to Distance Check
+##     P1S     => Not on the reverse path. Sent to Distance Check
 ##     F2[DGU] => A is in the fwd path, but not reverse? (see FR* above)
 ##     F3[DGU] => A is in both fwd and reverse path (see FR* above)
 ##     F4S     => Should not happen (ERROR)
@@ -93,6 +93,7 @@
 ##
 ##   Possible values are:
 ##     PDI  => Pass, Distance
+##     FDI  => Fail, Distance
 ##     FNRx => Fail, No Reply (where x is the number of noreplies)
 ##     FTV  => Fail, TTL Variance (within the probes to a single interface)
 ##
@@ -1270,7 +1271,7 @@ class TspsDealiasRetPathCheckTask
     
     if stamp_types[:no_stamp] > 0
       log(@err_message + "(no stamps)")
-      @dealias_result.ret_path = "FNS"
+      @dealias_result.ret_path = "PNS"
       # @dealias_result.overall = "UNKNOWN-NOALIAS"
       # send to the distance check
       @subtask = TspsDealiasDistanceTask.new(# (@probes_a | @probes_b), 
@@ -1282,7 +1283,7 @@ class TspsDealiasRetPathCheckTask
 
     if stamp_types[:one_stamp] > 0 
       log(@err_message + "(one stamp)")
-      @dealias_result.ret_path = "F1S"
+      @dealias_result.ret_path = "P1S"
       # @dealias_result.overall = "ERROR"
       # send to the distance check
       @subtask = TspsDealiasDistanceTask.new(# (@probes_a | @probes_b), 
@@ -1458,6 +1459,9 @@ class TspsDealiasSharedClockTask
     if dec_ts > 0
       log(@err_message + "(decrementing timestamp)")
       @dealias_result.shared_clk = "FDT#{dec_ts}"
+      #20110909 - alistair just notices the impossible logic in the next
+      #line. no idea what this is supposed to be doing
+      #TODO: fix this
       @dealias_result.overall = dec_ts == 0 ? "UNKNOWN-REPROBE" : 
         "NOALIAS-STRONG"
       @state = :done
