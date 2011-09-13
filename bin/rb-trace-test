@@ -1,0 +1,2470 @@
+#!/usr/bin/env ruby
+
+################################################################################
+# 
+# Contains code to test the trace.rb traceroute logic.
+#
+# Allows both simulation (using warts files) and testing (using manufactured
+# test cases)
+# 
+################################################################################
+
+unless Kernel.respond_to?(:require_relative)
+  module Kernel
+    def require_relative(path)
+      require File.join(File.dirname(caller[0]), path.to_str)
+    end
+  end
+end
+
+require 'rubygems'
+
+require 'ostruct'
+require 'optparse'
+
+require 'wartslib'
+
+require_relative('trace.rb')
+
+$options = OpenStruct.new
+
+$options.confidence = nil
+$options.dport = nil
+$options.firsthop = 1
+$options.gaplimit = 5
+$options.gapaction = :stop
+$options.hoplimit = 255
+$options.loops = 1
+$options.loopaction = 0
+$options.probe_method = :icmp
+$options.attempts = 2
+$options.all_allocated = false
+$options.not_time_exceeded = false
+$options.spacing = 0
+$options.concurrency = nil
+$options.recordroute = 0
+$options.timeout = 5
+$options.outformat = "ascii"
+
+opts = OptionParser.new
+
+opts.banner="usage: #{$0} [-?v] [--w wartsfile]"
+
+opts.on("-v", "--[no-]verbose", TrueClass,  "show detailed progress") do |v|
+  $options.verbose = v
+end
+
+opts.on("-I", "--wartsfile=PATH",
+        "warts format output from scamper to be used as the topology data " \
+        "for simulating traces (i.e. test using 'real' data)") do |v|
+  $options.wartsfile = v
+end
+
+opts.on_tail("-?", "--help", "show this message") do
+  puts opts
+  exit
+end
+
+begin
+  opts.parse!(ARGV)
+rescue OptionParser::ParseError
+  $stderr.puts "ERROR: " + $!.to_s + "\n\n"
+  $stderr.puts opts
+  exit 1
+end
+
+################################################################################
+################################################################################
+# Simulator classes
+#
+# The following classes are a logical grouping of the classes which are used
+# to perform traceroutes using existing warts data. That is, data which has
+# already been captured by a scamper process. This can be used to test the 
+# behavior of the TraceTask classes in specific situations.
+#
+################################################################################
+################################################################################
+
+#==============================================================================
+# TraceSim
+#
+# TraceSim is the top-level manager class for the warts simulator. It is
+# responsible for extracting the trace data from the warts file and executing
+# the individual traces.
+#
+#==============================================================================
+class TraceSim
+
+  def initialize
+    @warts = Warts::File::open $options.wartsfile
+    @warts.add_filters Warts::TRACE
+    @taskid = 1
+    @reqnum = 1
+  end
+
+  def next_taskid
+    @taskid += 1
+    return @taskid-1
+  end
+
+  def next_reqnum
+    @reqnum += 1
+    return @reqnum-1
+  end
+
+  def scamper_stop_to_symbol(stop_reason)
+    case stop_reason
+    when 0:
+        return :stop_none
+    when 1:
+        return :stop_completed
+    when 2:
+        return :stop_unreach
+    when 3:
+        return :stop_icmp
+    when 4:
+        return :stop_loop
+    when 5:
+        return :stop_gaplimit
+    when 6:
+        return :stop_error
+    when 7:
+        return :stop_hoplimit
+    when 8:
+        return :stop_gss
+    when 9:
+        return :stop_halted
+    else raise "unknown stop condition"
+    end
+  end
+    
+  def scamper_trace_to_ascii(trace)
+    str = "traceroute to #{trace.dst}\n"
+    expected_response = 0
+    last_hop = nil
+    attempts = trace.attempts
+    trace.each do |hop, response, hop_exists|
+      if last_hop != hop
+        last_hop = hop
+        expected_response = 0
+      end
+
+      if response == 0
+        str += (hop+1).to_s
+      end
+      #if response > expected_response
+        # print out some *'s to get us to the right place
+      #  str += sprintf("\t*\n") * (response-expected_response)
+      #end
+      if hop_exists
+        str += sprintf("\t%s\t\%s ms\n", trace.hop_addr(hop, response),
+                       trace.hop_rtt_str(hop, response))
+      else
+        str += sprintf("\t*\n")# * attempts
+      end
+    end
+   
+    # a somewhat naive way to convert scamper's old stop_completed to
+    # stop_unreach based on the icmp type of the last response
+    if scamper_stop_to_symbol(trace.stop_reason) == :stop_completed && 
+        trace.hop_icmp_type(trace.hop_count-1) == 3 &&
+        trace.hop_icmp_code(trace.hop_count-1) == 3
+      str += "stop reason: stop_unreach\n"
+    else
+      str += "stop reason: #{scamper_stop_to_symbol(trace.stop_reason)}\n"
+    end
+
+  end
+      
+  def insert_result(probe, trace)
+    # we need the details for the hop at probe.ttl, result at probe.attempt
+    hop = probe.ttl-1
+    res = probe.attempt-1
+
+    result = SimResult.new
+    
+    result.reqnum = next_reqnum
+    result.probe_src = trace.src
+    result.probe_dest = trace.dst
+    result.probe_ttl = probe.ttl
+    result.probe_ipid = probe.attempt
+
+    if trace.hop_exists?(hop, res)
+      result.responded = true
+      result.tx_sec = 0
+      result.tx_usec = 0
+      result.rx_sec = trace.hop_rtt_sec(hop, res)
+      result.rx_usec = trace.hop_rtt_usec(hop, res)
+      result.reply_src = trace.hop_addr(hop, res)
+      result.reply_ttl = trace.hop_reply_ttl(hop, res)
+      result.reply_qttl = trace.hop_inner_ipttl(hop, res)
+      result.reply_ipid = trace.hop_reply_ipid(hop, res)
+
+      if trace.hop_has_icmp_reply?(hop, res)
+        result.reply_icmp_type = trace.hop_icmp_type(hop, res)
+        result.reply_icmp_code = trace.hop_icmp_code(hop, res)
+      elsif trace.hop_has_tcp_reply?(hop, res)
+        result.reply_tcp = trace.hop_tcp_flags(hop, res)
+      end
+
+    else
+      result.responded = false
+    end
+
+    probe.result = result
+    return probe
+  end
+  
+  def insert_timeout(probe, trace)
+    result = SimResult.new
+    
+    result.reqnum = next_reqnum
+    result.probe_src = trace.src
+    result.probe_dest = trace.dst
+    result.probe_ttl = probe.ttl
+    result.probe_ipid = probe.attempt
+    result.responded = false
+
+    probe.result = result
+    return probe
+  end
+
+  def start
+    pass_cnt = 0
+    total_cnt = 0
+
+    @warts.read do |trace|
+      total_cnt += 1
+      scamper_output = scamper_trace_to_ascii(trace)
+
+
+      # check if this is a zero-ttl forwarding case
+      if scamper_stop_to_symbol(trace.stop_reason) == :stop_loop
+        if trace.hop_inner_ipttl(trace.hop_count-1) == 1 && 
+          trace.hop_inner_ipttl(trace.hop_count-2) == 0
+          # this is zttl
+          zttl = true
+        elsif trace.hop_addr(trace.hop_count-1) == 
+            trace.hop_addr(trace.hop_count-2)
+          # check for zttl earlier in the path
+          trace.hop_count.downto(2) do |i|
+            if trace.hop_exists?(i-1) && trace.hop_exists?(i-2) && 
+                trace.hop_inner_ipttl(i-1) == 1 &&
+                trace.hop_inner_ipttl(i-2) == 0
+              zttl = true
+            end
+          end
+        end
+      end
+
+      if zttl
+        puts "skipping #{trace.list_monitor} #{trace.dst} zero-ttl"
+        next
+      end
+      
+      $options.attempts = trace.attempts
+      $options.hoplimit = trace.hoplimit
+      $options.gaplimit = trace.gaplimit
+      $options.firsthop = trace.firsthop
+      $options.tos = trace.tos
+      $options.loops = trace.loops
+      $options.loopaction = 1
+
+      task = TraceTask.new(next_taskid, trace.dst, $options)
+
+      late_queue = []
+      destination_queue = []
+
+      while !task.is_complete && (probe = task.next_probe) != nil
+        duplicate_queue = []
+        
+        if trace.hop_exists?(probe.ttl-1, probe.attempt-1) && 
+            trace.hop_rtt(probe.ttl-1, probe.attempt-1) >
+            (trace.wait*1000)*(trace.attempts-probe.attempt+1)
+          # only send a timeout if this timeout is greater than the
+          # time left to be spent on the hop
+          late = probe.clone
+          insert_result(late, trace)
+
+          if late.result.reply_src == trace.dst
+            destination_queue << late
+          else
+            late_queue << late
+          end
+          insert_timeout(probe, trace)
+        else
+          insert_result(probe, trace)
+          response = probe.attempt + 1
+          while(trace.hop_exists?(probe.ttl-1, response-1))
+            duplicate = probe.clone
+            duplicate.attempt = response
+            insert_result(duplicate, trace)
+            #task.receive_probe(duplicate)
+            duplicate_queue << duplicate
+            response += 1
+          end
+        end
+        
+        while(late_queue.length > 0 && 
+              (late_queue[0].ttl < probe.ttl || probe.ttl == trace.hop_count))
+          task.receive_probe(late_queue.shift) 
+        end
+        
+        duplicate_queue.each do |duplicate|
+          task.receive_probe(duplicate)
+        end
+
+        task.receive_probe(probe)
+        
+        if probe.ttl == trace.hop_count
+          # return the destination probes
+          destination_queue.each do |p|
+            task.receive_probe(p)
+          end
+        end
+      end
+
+      if task.is_complete
+        if scamper_output == task.result.scamper_to_s
+          #puts "simulated trace to #{trace.dest} passed" if $options.verbose
+          pass_cnt += 1
+        elsif $options.verbose
+          puts "simulated trace to #{trace.dest} failed"
+          puts "scamper:"
+          puts scamper_output
+          puts "mper-trace:"
+          puts task.result.scamper_to_s
+          puts "\n\n"
+        end
+      else
+        raise "Task did not complete"
+      end
+
+    end
+    pct = pass_cnt / total_cnt.to_f * 100
+    printf("%d of %d traces passed the simulation (%.2f%%)\n", 
+           pass_cnt, total_cnt, pct)
+
+  end
+
+end #TraceSim
+
+class SimResult
+  
+  attr_accessor :reqnum
+  attr_accessor :probe_src, :probe_dest, :udata
+  attr_accessor :tx_sec, :tx_usec, :rx_sec, :rx_usec
+  attr_accessor :probe_ttl, :probe_ipid, :reply_src, :reply_ttl, :reply_qttl
+  attr_accessor :reply_rr
+  attr_accessor :reply_tsps_ts1, :reply_tsps_ip1
+  attr_accessor :reply_tsps_ts2, :reply_tsps_ip2
+  attr_accessor :reply_tsps_ts3, :reply_tsps_ip3
+  attr_accessor :reply_tsps_ts4, :reply_tsps_ip4
+  attr_accessor :reply_ipid
+
+  attr_accessor :responded
+  attr_accessor :reply_icmp_type, :reply_icmp_code
+  attr_accessor :reply_tcp
+  
+  def responded?
+    @responded
+  end
+  
+  def icmp_reply?
+    @reply_icmp_type != nil
+  end
+  
+  def tcp_reply?
+    @reply_tcp != nil
+  end
+  
+  def reply_tcp_flags
+    @reply_tcp
+  end
+  
+  # Just a convenience function.  This returns the same strings as warts-dump.
+  def decompose_tcp_flags
+    return nil unless @reply_tcp
+    retval = []
+    retval << "fin" if (@reply_tcp & 0x01) != 0
+    retval << "syn" if (@reply_tcp & 0x02) != 0
+    retval << "rst" if (@reply_tcp & 0x04) != 0
+    retval << "psh" if (@reply_tcp & 0x08) != 0
+    retval << "ack" if (@reply_tcp & 0x10) != 0
+    retval << "urg" if (@reply_tcp & 0x20) != 0
+    retval << "ece" if (@reply_tcp & 0x40) != 0
+    retval << "cwr" if (@reply_tcp & 0x80) != 0
+    retval
+  end
+  
+end
+
+################################################################################
+################################################################################
+# Test Harness classes
+#
+# The following classes are a logical grouping of the classes which are used
+# to simulate specific path conditions designed to test the traceroute
+# implementation.
+#
+################################################################################
+################################################################################
+
+
+#==============================================================================
+# TraceTest
+#
+# The TraceTest class manages the collection of Test Set instances that will
+# be used for testing. The structure is hierarchical, so each test set has
+# a collection of actual tests, each of which may contain a set of sub-tests.
+#
+#==============================================================================
+class TraceTest
+
+  def initialize
+    @sets = []
+    @sets << TraceTestResponseTestSet.new
+    @sets << TraceTestTopologyTestSet.new
+    @sets << TraceTestLoopTestSet.new
+    # others
+
+  end #initialize
+
+  def start
+    @sets.each do |set|
+      puts "Excecuting #{set}..."
+      set.execute_all
+    end
+  end #start
+
+  def self.generate_ip(ttl, attempt)
+    return "%d.%d.%d.%d" % [192,168,ttl,attempt]
+  end
+
+end # TraceTest
+
+class TraceTestResponseTestSet
+
+  def initialize
+    @tests = []
+    @tests << TraceTestResponseUnreachTest.new
+    @tests << TraceTestResponseTcpFlagTest.new
+    @tests << TraceTestResponseTtlExpiredTest.new
+  end
+
+  def execute_all
+    @tests.each do |test|
+      test.execute_all
+    end
+  end
+
+  def to_s
+    "TraceTest Response Test Set"
+  end
+
+end #TraceTestResponseTestSet
+
+class TraceTestResponseUnreachTest
+
+  def initialize
+    @test_number = 1
+  end
+
+  def to_s
+    "TraceTest Response Unreachable Test"
+  end
+
+  def execute_all
+    execute_method_tests(:icmp)
+    execute_method_tests(:udp)
+    execute_method_tests(:tcp)
+  end
+
+  def execute_method_tests(method)
+    execute_test(method, :port)
+    execute_test(method, :proto)
+    execute_test(method, :host)
+    execute_test(method, :admin)
+    execute_test(method, :admin_dest)
+    execute_test(method, :net)
+  end
+
+  def execute_test(method, type)
+    test_name = "#{self.to_s} (#{method}, #{type})"
+    puts "Executing #{test_name}" if $options.verbose
+
+    # 'work out' some of the features of our path
+    path_length = 8 #rand(20) + 5
+    source = TraceTest.generate_ip(0,0)
+    target = TraceTest.generate_ip(path_length,1)
+    time = Time.now
+    taskid = @test_number
+    @test_number += 1
+    reqnum = 1
+
+    puts "Path Length: #{path_length}" if $options.verbose
+    puts "Source: #{source}" if $options.verbose
+    puts "Destination: #{target}" if $options.verbose
+
+    $options.probe_method = method
+
+    task = TraceTask.new(taskid, target, $options)
+
+    while !task.is_complete && (probe = task.next_probe) != nil
+      # create a response and pass it back to the task
+      probe.id = reqnum
+      #puts probe
+
+      probe.result = result = TestResult.new(reqnum, source, probe.dest, 
+                                            probe.ttl, time, probe.attempt)
+      reqnum += 1
+      time += 10
+      
+      result.responded = true
+      result.reply_icmp = true
+
+      if probe.ttl == path_length
+        # send the weird response
+        result.reply_icmp_type = 3
+        result.reply_src = target
+        case type
+        when :port:
+            result.reply_icmp_code = 3
+        when :proto:
+            result.reply_icmp_code = 2
+        when :host:
+            result.reply_icmp_code = 1
+        when :admin:
+            result.reply_icmp_code = 13
+        when :admin_dest:
+            result.reply_icmp_code = 10
+        when :net:
+            result.reply_icmp_code = 0
+        else raise "missing test case"
+        end
+      else
+        # send a normal response
+        # type: 11, code: 0
+        result.reply_icmp_type = 11
+        result.reply_icmp_code = 0
+      end
+      
+      task.receive_probe(probe)
+
+    end
+
+    puts task.result if $options.verbose
+
+    if task.result.to_s == expected_result(method, type)
+      puts "#{test_name} passed"
+    else
+      puts "#{test_name} failed"
+      puts task.result
+    end
+
+  end
+
+  def expected_result(method, type)
+    if (method == :udp || method == :tcp) && type == :port
+"traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+stop reason: stop_completed
+"
+    else
+      "traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+stop reason: stop_unreach
+"
+    end
+  end
+  
+end #TraceTestResponseUnreachTest
+
+class TraceTestResponseTcpFlagTest
+
+  def initialize
+    @test_number = 1
+  end
+
+  def to_s
+    "TraceTest Response Tcp Flag Test"
+  end
+
+  def execute_all
+    execute_test(:fin)
+    execute_test(:syn)
+    execute_test(:rst)
+    execute_test(:psh)
+    execute_test(:ack)
+    execute_test(:urg)
+    execute_test(:ece)
+    execute_test(:cwr)
+    execute_test(:syn_ack)
+  end
+
+  def execute_test(type)
+    test_name = "#{self.to_s} (#{type})"
+    puts "Executing #{test_name}" if $options.verbose
+
+    # 'work out' some of the features of our path
+    path_length = 8#rand(20) + 5
+    source = TraceTest.generate_ip(0,0)
+    target = TraceTest.generate_ip(path_length,1)
+    time = Time.now
+    taskid = @test_number
+    @test_number += 1
+    reqnum = 1
+
+    puts "Path Length: #{path_length}" if $options.verbose
+    puts "Source: #{source}" if $options.verbose
+    puts "Destination: #{target}" if $options.verbose
+
+    $options.probe_method = :tcp
+
+    task = TraceTask.new(taskid, target, $options)
+
+    while !task.is_complete && (probe = task.next_probe) != nil
+      # create a response and pass it back to the task
+      probe.id = reqnum
+      #puts probe
+
+      probe.result = result = TestResult.new(reqnum, source, probe.dest, 
+                                            probe.ttl, time, probe.attempt)
+      reqnum += 1
+      time += 10
+      
+      result.responded = true
+
+      if probe.ttl == path_length
+        # send the weird response
+        result.reply_src = target
+        case type
+        when :fin:
+            result.reply_tcp = 0x01
+        when :syn:
+            result.reply_tcp = 0x02
+        when :rst:
+            result.reply_tcp = 0x04
+        when :psh:
+            result.reply_tcp = 0x08
+        when :ack:
+            result.reply_tcp = 0x10
+        when :urg:
+            result.reply_tcp = 0x20
+        when :ece:
+            result.reply_tcp = 0x40
+        when :cwr:
+            result.reply_tcp = 0x80
+        when :syn_ack:
+            result.reply_tcp = 0x02
+          result.reply_tcp &= 0x10
+        else raise "unknown type #{type}"
+        end
+      else
+        # send a normal response
+        # type: 11, code: 0
+        result.reply_icmp = true
+        result.reply_icmp_type = 11
+        result.reply_icmp_code = 0
+      end
+      
+      task.receive_probe(probe)
+
+    end
+
+    puts task.result if $options.verbose
+
+    if task.result.to_s == expected_result(type)
+      puts "#{test_name} passed"
+    else
+      puts "#{test_name} failed"
+      puts task.result
+    end
+
+  end
+
+  def expected_result(type)
+"traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+stop reason: stop_completed
+"
+  end
+  
+end #TraceTestResponseTcpFlagTest
+
+class TraceTestResponseTtlExpiredTest
+
+  def initialize
+    @test_number = 1
+  end
+
+  def to_s
+    "TraceTest Response TTL Expired Test"
+  end
+
+  def execute_all
+    execute_method_tests(:icmp)
+    execute_method_tests(:udp)
+    execute_method_tests(:tcp)
+  end
+
+  def execute_method_tests(method)
+    execute_test(method, :dest_exp_stop)
+    execute_test(method, :dest_exp_ignore)
+  end
+
+  def execute_test(method, type)
+    test_name = "#{self.to_s} (#{method}, #{type})"
+    puts "Executing #{test_name}" if $options.verbose
+
+    # 'work out' some of the features of our path
+    path_length = 8 #rand(20) + 5
+    dest_response_ttl = path_length + 3
+    source = TraceTest.generate_ip(0,0)
+    target = TraceTest.generate_ip(path_length,1)
+    time = Time.now
+    taskid = @test_number
+    @test_number += 1
+    reqnum = 1
+
+    puts "Path Length: #{path_length}" if $options.verbose
+    puts "Source: #{source}" if $options.verbose
+    puts "Destination: #{target}" if $options.verbose
+
+    $options.probe_method = method
+
+    case type
+    when :dest_exp_stop:
+        $options.not_time_exceeded = false
+    when :dest_exp_ignore:
+        $options.not_time_exceeded = true
+    end
+
+    task = TraceTask.new(taskid, target, $options)
+
+    while !task.is_complete && (probe = task.next_probe) != nil
+      # create a response and pass it back to the task
+      probe.id = reqnum
+      #puts probe
+
+      probe.result = result = TestResult.new(reqnum, source, probe.dest, 
+                                            probe.ttl, time, probe.attempt)
+      reqnum += 1
+      time += 10
+      
+      result.responded = true
+      result.reply_icmp = true
+      result.reply_icmp_type = 11
+      result.reply_icmp_code = 0
+
+      if probe.ttl == path_length
+        # match the address
+        result.reply_src = target
+      elsif probe.ttl == dest_response_ttl
+        result.reply_src = target
+        if method == :icmp
+          result.reply_icmp_type = 0
+          result.reply_icmp_code = 0
+        elsif method == :udp
+          result.reply_icmp_type = 3
+          result.reply_icmp_code = 3
+        else
+          result.reply_icmp = nil
+          result.reply_tcp = 0x04
+        end
+          
+      end
+
+      task.receive_probe(probe)
+
+    end
+
+    puts task.result if $options.verbose
+
+    if task.result.to_s == expected_result(method, type)
+      puts "#{test_name} passed"
+    else
+      puts "#{test_name} failed"
+      puts task.result
+    end
+
+  end
+
+  def expected_result(method, type)
+    if type == :dest_exp_stop
+      "traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+stop reason: stop_completed
+"
+    else
+      "traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.8.1	1000.000 ms
+stop reason: stop_completed
+"
+    end
+  end
+  
+end #TraceTestResponseTtlExpiredTest
+
+class TraceTestTopologyTestSet
+
+  def initialize
+    @tests = []
+    @tests << TraceTestTopologyEarlyDestTest.new
+    @tests << TraceTestTopologyPathLengthTest.new
+    @tests << TraceTestTopologyMultipleResponsesTest.new
+  end
+
+  def execute_all
+    @tests.each do |test|
+      test.execute_all
+    end
+  end
+
+  def to_s
+    "TraceTest Topology Test Set"
+  end
+
+end #TraceTestTopologyTestSet
+
+class TraceTestTopologyEarlyDestTest
+
+  def initialize
+    @test_number = 1
+  end
+
+  def to_s
+    "TraceTest Topology Early Destination Test"
+  end
+
+  def execute_all
+    execute_test(:icmp)
+    execute_test(:udp)
+    execute_test(:tcp)
+  end
+
+  def execute_test(method)
+    test_name = "#{self.to_s} (#{method})"
+    puts "Executing #{test_name}" if $options.verbose
+
+    # 'work out' some of the features of our path
+    path_length = 11 #rand(20) + 5
+    dest_response_ttl = path_length - 3
+    source = TraceTest.generate_ip(0,0)
+    target = TraceTest.generate_ip(dest_response_ttl,1)
+    time = Time.now
+    taskid = @test_number
+    @test_number += 1
+    reqnum = 1
+
+    late_response = nil
+
+    puts "Path Length: #{path_length}" if $options.verbose
+    puts "Source: #{source}" if $options.verbose
+    puts "Destination: #{target}" if $options.verbose
+
+    $options.probe_method = method
+
+    task = TraceTask.new(taskid, target, $options)
+
+    while !task.is_complete && (probe = task.next_probe) != nil
+      # create a response and pass it back to the task
+      probe.id = reqnum
+      #puts probe
+
+      probe.result = result = TestResult.new(reqnum, source, probe.dest, 
+                                            probe.ttl, time, probe.attempt)
+      result.responded = true
+      result.reply_icmp = true
+      result.reply_icmp_type = 11
+      result.reply_icmp_code = 0
+
+      reqnum += 1
+      time += 10
+
+      # what we're trying to do here is simulate a reply from the destination
+      # a couple of hops prior to the one we're currently probing at
+      # the way we will do that is by forcing the ttl of the packet to be
+      # at dest_response_ttl when the traceroute is expecting it to be
+      # path_length
+      
+      if probe.ttl == dest_response_ttl
+        # make a copy of this probe so that we can return it later
+        if late_response # let the retry get a response
+          # point out that this was the load balanced reply
+          result.reply_src = TraceTest.generate_ip(dest_response_ttl, 99)
+        else
+          late_response = probe.clone
+          late_response.result = TestResult.new(reqnum, source, probe.dest, 
+                                     dest_response_ttl, time, probe.attempt)
+          late_response.result.responded = true
+          late_response.result.reply_icmp = true
+          late_response.result.reply_src = target
+          if method == :icmp
+            # echo reply
+            late_response.result.reply_icmp_type = 0
+            late_response.result.reply_icmp_code = 0
+          else
+            # port unreach
+            late_response.result.reply_icmp_type = 3
+            late_response.result.reply_icmp_code = 3
+          end
+
+          result.responded = false
+          result.reply_icmp = false
+        end
+      elsif probe.ttl == path_length
+        # return the saved probe
+        probe = late_response
+      end
+      task.receive_probe(probe)
+
+    end
+
+    puts task.result if $options.verbose
+
+    if task.result.to_s == expected_result(method)
+      puts "#{test_name} passed"
+    else
+      puts "#{test_name} failed"
+      puts task.result
+    end
+
+  end
+
+  def expected_result(method)
+    return "traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	*
+	192.168.8.99	1000.000 ms
+	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+stop reason: stop_completed
+"
+  end
+  
+end #TraceTestTopologyEarlyDestTest
+
+class TraceTestTopologyPathLengthTest
+
+  def initialize
+    @test_number = 1
+  end
+
+  def to_s
+    "TraceTest Topology Path Length Test"
+  end
+
+  def execute_all
+    execute_method_tests(:icmp)
+    execute_method_tests(:udp)
+    execute_method_tests(:tcp)
+  end
+
+  def execute_method_tests(method)
+    execute_test(method, 1)
+    execute_test(method, 2)
+    execute_test(method, 44)
+    execute_test(method, 254)
+    execute_test(method, 1000)
+  end
+
+  def execute_test(method, path_length)
+    test_name = "#{self.to_s} (#{method}, len:#{path_length})"
+    puts "Executing #{test_name}" if $options.verbose
+
+    # 'work out' some of the features of our path
+    source = TraceTest.generate_ip(0,0)
+    target = TraceTest.generate_ip(path_length,1)
+    time = Time.now
+    taskid = @test_number
+    @test_number += 1
+    reqnum = 1
+
+    puts "Path Length: #{path_length}" if $options.verbose
+    puts "Source: #{source}" if $options.verbose
+    puts "Destination: #{target}" if $options.verbose
+
+    $options.probe_method = method
+
+    task = TraceTask.new(taskid, target, $options)
+
+    while !task.is_complete && (probe = task.next_probe) != nil
+      # create a response and pass it back to the task
+      probe.id = reqnum
+      #puts probe
+
+      probe.result = result = TestResult.new(reqnum, source, probe.dest, 
+                                            probe.ttl, time, probe.attempt)
+      reqnum += 1
+      time += 10
+      
+      result.responded = true
+      result.reply_icmp = true
+
+      if probe.ttl == path_length
+        # match the address
+        result.reply_src = target
+        if method == :icmp
+          result.reply_icmp_type = 0
+          result.reply_icmp_code = 0
+        else
+          result.reply_icmp_type = 3
+          result.reply_icmp_code = 3
+        end
+      else
+        # ttl exp
+        result.reply_icmp_type = 11
+        result.reply_icmp_code = 0
+      end
+
+      task.receive_probe(probe)
+
+    end
+
+    puts task.result if $options.verbose
+
+    if task.result.to_s == expected_result(method, path_length)
+      puts "#{test_name} passed"
+    else
+      puts "#{test_name} failed"
+      puts task.result
+    end
+
+  end
+
+  def expected_result(method, path_length)
+    case path_length
+      when 1:
+        return "traceroute to 192.168.1.1
+1	192.168.1.1	1000.000 ms
+stop reason: stop_completed
+"
+      when 2:
+        return "traceroute to 192.168.2.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+stop reason: stop_completed
+"
+      when 44:
+        return "traceroute to 192.168.44.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+13	192.168.13.1	1000.000 ms
+14	192.168.14.1	1000.000 ms
+15	192.168.15.1	1000.000 ms
+16	192.168.16.1	1000.000 ms
+17	192.168.17.1	1000.000 ms
+18	192.168.18.1	1000.000 ms
+19	192.168.19.1	1000.000 ms
+20	192.168.20.1	1000.000 ms
+21	192.168.21.1	1000.000 ms
+22	192.168.22.1	1000.000 ms
+23	192.168.23.1	1000.000 ms
+24	192.168.24.1	1000.000 ms
+25	192.168.25.1	1000.000 ms
+26	192.168.26.1	1000.000 ms
+27	192.168.27.1	1000.000 ms
+28	192.168.28.1	1000.000 ms
+29	192.168.29.1	1000.000 ms
+30	192.168.30.1	1000.000 ms
+31	192.168.31.1	1000.000 ms
+32	192.168.32.1	1000.000 ms
+33	192.168.33.1	1000.000 ms
+34	192.168.34.1	1000.000 ms
+35	192.168.35.1	1000.000 ms
+36	192.168.36.1	1000.000 ms
+37	192.168.37.1	1000.000 ms
+38	192.168.38.1	1000.000 ms
+39	192.168.39.1	1000.000 ms
+40	192.168.40.1	1000.000 ms
+41	192.168.41.1	1000.000 ms
+42	192.168.42.1	1000.000 ms
+43	192.168.43.1	1000.000 ms
+44	192.168.44.1	1000.000 ms
+stop reason: stop_completed
+"
+    when 254:
+        return "traceroute to 192.168.254.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+13	192.168.13.1	1000.000 ms
+14	192.168.14.1	1000.000 ms
+15	192.168.15.1	1000.000 ms
+16	192.168.16.1	1000.000 ms
+17	192.168.17.1	1000.000 ms
+18	192.168.18.1	1000.000 ms
+19	192.168.19.1	1000.000 ms
+20	192.168.20.1	1000.000 ms
+21	192.168.21.1	1000.000 ms
+22	192.168.22.1	1000.000 ms
+23	192.168.23.1	1000.000 ms
+24	192.168.24.1	1000.000 ms
+25	192.168.25.1	1000.000 ms
+26	192.168.26.1	1000.000 ms
+27	192.168.27.1	1000.000 ms
+28	192.168.28.1	1000.000 ms
+29	192.168.29.1	1000.000 ms
+30	192.168.30.1	1000.000 ms
+31	192.168.31.1	1000.000 ms
+32	192.168.32.1	1000.000 ms
+33	192.168.33.1	1000.000 ms
+34	192.168.34.1	1000.000 ms
+35	192.168.35.1	1000.000 ms
+36	192.168.36.1	1000.000 ms
+37	192.168.37.1	1000.000 ms
+38	192.168.38.1	1000.000 ms
+39	192.168.39.1	1000.000 ms
+40	192.168.40.1	1000.000 ms
+41	192.168.41.1	1000.000 ms
+42	192.168.42.1	1000.000 ms
+43	192.168.43.1	1000.000 ms
+44	192.168.44.1	1000.000 ms
+45	192.168.45.1	1000.000 ms
+46	192.168.46.1	1000.000 ms
+47	192.168.47.1	1000.000 ms
+48	192.168.48.1	1000.000 ms
+49	192.168.49.1	1000.000 ms
+50	192.168.50.1	1000.000 ms
+51	192.168.51.1	1000.000 ms
+52	192.168.52.1	1000.000 ms
+53	192.168.53.1	1000.000 ms
+54	192.168.54.1	1000.000 ms
+55	192.168.55.1	1000.000 ms
+56	192.168.56.1	1000.000 ms
+57	192.168.57.1	1000.000 ms
+58	192.168.58.1	1000.000 ms
+59	192.168.59.1	1000.000 ms
+60	192.168.60.1	1000.000 ms
+61	192.168.61.1	1000.000 ms
+62	192.168.62.1	1000.000 ms
+63	192.168.63.1	1000.000 ms
+64	192.168.64.1	1000.000 ms
+65	192.168.65.1	1000.000 ms
+66	192.168.66.1	1000.000 ms
+67	192.168.67.1	1000.000 ms
+68	192.168.68.1	1000.000 ms
+69	192.168.69.1	1000.000 ms
+70	192.168.70.1	1000.000 ms
+71	192.168.71.1	1000.000 ms
+72	192.168.72.1	1000.000 ms
+73	192.168.73.1	1000.000 ms
+74	192.168.74.1	1000.000 ms
+75	192.168.75.1	1000.000 ms
+76	192.168.76.1	1000.000 ms
+77	192.168.77.1	1000.000 ms
+78	192.168.78.1	1000.000 ms
+79	192.168.79.1	1000.000 ms
+80	192.168.80.1	1000.000 ms
+81	192.168.81.1	1000.000 ms
+82	192.168.82.1	1000.000 ms
+83	192.168.83.1	1000.000 ms
+84	192.168.84.1	1000.000 ms
+85	192.168.85.1	1000.000 ms
+86	192.168.86.1	1000.000 ms
+87	192.168.87.1	1000.000 ms
+88	192.168.88.1	1000.000 ms
+89	192.168.89.1	1000.000 ms
+90	192.168.90.1	1000.000 ms
+91	192.168.91.1	1000.000 ms
+92	192.168.92.1	1000.000 ms
+93	192.168.93.1	1000.000 ms
+94	192.168.94.1	1000.000 ms
+95	192.168.95.1	1000.000 ms
+96	192.168.96.1	1000.000 ms
+97	192.168.97.1	1000.000 ms
+98	192.168.98.1	1000.000 ms
+99	192.168.99.1	1000.000 ms
+100	192.168.100.1	1000.000 ms
+101	192.168.101.1	1000.000 ms
+102	192.168.102.1	1000.000 ms
+103	192.168.103.1	1000.000 ms
+104	192.168.104.1	1000.000 ms
+105	192.168.105.1	1000.000 ms
+106	192.168.106.1	1000.000 ms
+107	192.168.107.1	1000.000 ms
+108	192.168.108.1	1000.000 ms
+109	192.168.109.1	1000.000 ms
+110	192.168.110.1	1000.000 ms
+111	192.168.111.1	1000.000 ms
+112	192.168.112.1	1000.000 ms
+113	192.168.113.1	1000.000 ms
+114	192.168.114.1	1000.000 ms
+115	192.168.115.1	1000.000 ms
+116	192.168.116.1	1000.000 ms
+117	192.168.117.1	1000.000 ms
+118	192.168.118.1	1000.000 ms
+119	192.168.119.1	1000.000 ms
+120	192.168.120.1	1000.000 ms
+121	192.168.121.1	1000.000 ms
+122	192.168.122.1	1000.000 ms
+123	192.168.123.1	1000.000 ms
+124	192.168.124.1	1000.000 ms
+125	192.168.125.1	1000.000 ms
+126	192.168.126.1	1000.000 ms
+127	192.168.127.1	1000.000 ms
+128	192.168.128.1	1000.000 ms
+129	192.168.129.1	1000.000 ms
+130	192.168.130.1	1000.000 ms
+131	192.168.131.1	1000.000 ms
+132	192.168.132.1	1000.000 ms
+133	192.168.133.1	1000.000 ms
+134	192.168.134.1	1000.000 ms
+135	192.168.135.1	1000.000 ms
+136	192.168.136.1	1000.000 ms
+137	192.168.137.1	1000.000 ms
+138	192.168.138.1	1000.000 ms
+139	192.168.139.1	1000.000 ms
+140	192.168.140.1	1000.000 ms
+141	192.168.141.1	1000.000 ms
+142	192.168.142.1	1000.000 ms
+143	192.168.143.1	1000.000 ms
+144	192.168.144.1	1000.000 ms
+145	192.168.145.1	1000.000 ms
+146	192.168.146.1	1000.000 ms
+147	192.168.147.1	1000.000 ms
+148	192.168.148.1	1000.000 ms
+149	192.168.149.1	1000.000 ms
+150	192.168.150.1	1000.000 ms
+151	192.168.151.1	1000.000 ms
+152	192.168.152.1	1000.000 ms
+153	192.168.153.1	1000.000 ms
+154	192.168.154.1	1000.000 ms
+155	192.168.155.1	1000.000 ms
+156	192.168.156.1	1000.000 ms
+157	192.168.157.1	1000.000 ms
+158	192.168.158.1	1000.000 ms
+159	192.168.159.1	1000.000 ms
+160	192.168.160.1	1000.000 ms
+161	192.168.161.1	1000.000 ms
+162	192.168.162.1	1000.000 ms
+163	192.168.163.1	1000.000 ms
+164	192.168.164.1	1000.000 ms
+165	192.168.165.1	1000.000 ms
+166	192.168.166.1	1000.000 ms
+167	192.168.167.1	1000.000 ms
+168	192.168.168.1	1000.000 ms
+169	192.168.169.1	1000.000 ms
+170	192.168.170.1	1000.000 ms
+171	192.168.171.1	1000.000 ms
+172	192.168.172.1	1000.000 ms
+173	192.168.173.1	1000.000 ms
+174	192.168.174.1	1000.000 ms
+175	192.168.175.1	1000.000 ms
+176	192.168.176.1	1000.000 ms
+177	192.168.177.1	1000.000 ms
+178	192.168.178.1	1000.000 ms
+179	192.168.179.1	1000.000 ms
+180	192.168.180.1	1000.000 ms
+181	192.168.181.1	1000.000 ms
+182	192.168.182.1	1000.000 ms
+183	192.168.183.1	1000.000 ms
+184	192.168.184.1	1000.000 ms
+185	192.168.185.1	1000.000 ms
+186	192.168.186.1	1000.000 ms
+187	192.168.187.1	1000.000 ms
+188	192.168.188.1	1000.000 ms
+189	192.168.189.1	1000.000 ms
+190	192.168.190.1	1000.000 ms
+191	192.168.191.1	1000.000 ms
+192	192.168.192.1	1000.000 ms
+193	192.168.193.1	1000.000 ms
+194	192.168.194.1	1000.000 ms
+195	192.168.195.1	1000.000 ms
+196	192.168.196.1	1000.000 ms
+197	192.168.197.1	1000.000 ms
+198	192.168.198.1	1000.000 ms
+199	192.168.199.1	1000.000 ms
+200	192.168.200.1	1000.000 ms
+201	192.168.201.1	1000.000 ms
+202	192.168.202.1	1000.000 ms
+203	192.168.203.1	1000.000 ms
+204	192.168.204.1	1000.000 ms
+205	192.168.205.1	1000.000 ms
+206	192.168.206.1	1000.000 ms
+207	192.168.207.1	1000.000 ms
+208	192.168.208.1	1000.000 ms
+209	192.168.209.1	1000.000 ms
+210	192.168.210.1	1000.000 ms
+211	192.168.211.1	1000.000 ms
+212	192.168.212.1	1000.000 ms
+213	192.168.213.1	1000.000 ms
+214	192.168.214.1	1000.000 ms
+215	192.168.215.1	1000.000 ms
+216	192.168.216.1	1000.000 ms
+217	192.168.217.1	1000.000 ms
+218	192.168.218.1	1000.000 ms
+219	192.168.219.1	1000.000 ms
+220	192.168.220.1	1000.000 ms
+221	192.168.221.1	1000.000 ms
+222	192.168.222.1	1000.000 ms
+223	192.168.223.1	1000.000 ms
+224	192.168.224.1	1000.000 ms
+225	192.168.225.1	1000.000 ms
+226	192.168.226.1	1000.000 ms
+227	192.168.227.1	1000.000 ms
+228	192.168.228.1	1000.000 ms
+229	192.168.229.1	1000.000 ms
+230	192.168.230.1	1000.000 ms
+231	192.168.231.1	1000.000 ms
+232	192.168.232.1	1000.000 ms
+233	192.168.233.1	1000.000 ms
+234	192.168.234.1	1000.000 ms
+235	192.168.235.1	1000.000 ms
+236	192.168.236.1	1000.000 ms
+237	192.168.237.1	1000.000 ms
+238	192.168.238.1	1000.000 ms
+239	192.168.239.1	1000.000 ms
+240	192.168.240.1	1000.000 ms
+241	192.168.241.1	1000.000 ms
+242	192.168.242.1	1000.000 ms
+243	192.168.243.1	1000.000 ms
+244	192.168.244.1	1000.000 ms
+245	192.168.245.1	1000.000 ms
+246	192.168.246.1	1000.000 ms
+247	192.168.247.1	1000.000 ms
+248	192.168.248.1	1000.000 ms
+249	192.168.249.1	1000.000 ms
+250	192.168.250.1	1000.000 ms
+251	192.168.251.1	1000.000 ms
+252	192.168.252.1	1000.000 ms
+253	192.168.253.1	1000.000 ms
+254	192.168.254.1	1000.000 ms
+stop reason: stop_completed
+"
+    when 1000:
+        return "traceroute to 192.168.1000.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+13	192.168.13.1	1000.000 ms
+14	192.168.14.1	1000.000 ms
+15	192.168.15.1	1000.000 ms
+16	192.168.16.1	1000.000 ms
+17	192.168.17.1	1000.000 ms
+18	192.168.18.1	1000.000 ms
+19	192.168.19.1	1000.000 ms
+20	192.168.20.1	1000.000 ms
+21	192.168.21.1	1000.000 ms
+22	192.168.22.1	1000.000 ms
+23	192.168.23.1	1000.000 ms
+24	192.168.24.1	1000.000 ms
+25	192.168.25.1	1000.000 ms
+26	192.168.26.1	1000.000 ms
+27	192.168.27.1	1000.000 ms
+28	192.168.28.1	1000.000 ms
+29	192.168.29.1	1000.000 ms
+30	192.168.30.1	1000.000 ms
+31	192.168.31.1	1000.000 ms
+32	192.168.32.1	1000.000 ms
+33	192.168.33.1	1000.000 ms
+34	192.168.34.1	1000.000 ms
+35	192.168.35.1	1000.000 ms
+36	192.168.36.1	1000.000 ms
+37	192.168.37.1	1000.000 ms
+38	192.168.38.1	1000.000 ms
+39	192.168.39.1	1000.000 ms
+40	192.168.40.1	1000.000 ms
+41	192.168.41.1	1000.000 ms
+42	192.168.42.1	1000.000 ms
+43	192.168.43.1	1000.000 ms
+44	192.168.44.1	1000.000 ms
+45	192.168.45.1	1000.000 ms
+46	192.168.46.1	1000.000 ms
+47	192.168.47.1	1000.000 ms
+48	192.168.48.1	1000.000 ms
+49	192.168.49.1	1000.000 ms
+50	192.168.50.1	1000.000 ms
+51	192.168.51.1	1000.000 ms
+52	192.168.52.1	1000.000 ms
+53	192.168.53.1	1000.000 ms
+54	192.168.54.1	1000.000 ms
+55	192.168.55.1	1000.000 ms
+56	192.168.56.1	1000.000 ms
+57	192.168.57.1	1000.000 ms
+58	192.168.58.1	1000.000 ms
+59	192.168.59.1	1000.000 ms
+60	192.168.60.1	1000.000 ms
+61	192.168.61.1	1000.000 ms
+62	192.168.62.1	1000.000 ms
+63	192.168.63.1	1000.000 ms
+64	192.168.64.1	1000.000 ms
+65	192.168.65.1	1000.000 ms
+66	192.168.66.1	1000.000 ms
+67	192.168.67.1	1000.000 ms
+68	192.168.68.1	1000.000 ms
+69	192.168.69.1	1000.000 ms
+70	192.168.70.1	1000.000 ms
+71	192.168.71.1	1000.000 ms
+72	192.168.72.1	1000.000 ms
+73	192.168.73.1	1000.000 ms
+74	192.168.74.1	1000.000 ms
+75	192.168.75.1	1000.000 ms
+76	192.168.76.1	1000.000 ms
+77	192.168.77.1	1000.000 ms
+78	192.168.78.1	1000.000 ms
+79	192.168.79.1	1000.000 ms
+80	192.168.80.1	1000.000 ms
+81	192.168.81.1	1000.000 ms
+82	192.168.82.1	1000.000 ms
+83	192.168.83.1	1000.000 ms
+84	192.168.84.1	1000.000 ms
+85	192.168.85.1	1000.000 ms
+86	192.168.86.1	1000.000 ms
+87	192.168.87.1	1000.000 ms
+88	192.168.88.1	1000.000 ms
+89	192.168.89.1	1000.000 ms
+90	192.168.90.1	1000.000 ms
+91	192.168.91.1	1000.000 ms
+92	192.168.92.1	1000.000 ms
+93	192.168.93.1	1000.000 ms
+94	192.168.94.1	1000.000 ms
+95	192.168.95.1	1000.000 ms
+96	192.168.96.1	1000.000 ms
+97	192.168.97.1	1000.000 ms
+98	192.168.98.1	1000.000 ms
+99	192.168.99.1	1000.000 ms
+100	192.168.100.1	1000.000 ms
+101	192.168.101.1	1000.000 ms
+102	192.168.102.1	1000.000 ms
+103	192.168.103.1	1000.000 ms
+104	192.168.104.1	1000.000 ms
+105	192.168.105.1	1000.000 ms
+106	192.168.106.1	1000.000 ms
+107	192.168.107.1	1000.000 ms
+108	192.168.108.1	1000.000 ms
+109	192.168.109.1	1000.000 ms
+110	192.168.110.1	1000.000 ms
+111	192.168.111.1	1000.000 ms
+112	192.168.112.1	1000.000 ms
+113	192.168.113.1	1000.000 ms
+114	192.168.114.1	1000.000 ms
+115	192.168.115.1	1000.000 ms
+116	192.168.116.1	1000.000 ms
+117	192.168.117.1	1000.000 ms
+118	192.168.118.1	1000.000 ms
+119	192.168.119.1	1000.000 ms
+120	192.168.120.1	1000.000 ms
+121	192.168.121.1	1000.000 ms
+122	192.168.122.1	1000.000 ms
+123	192.168.123.1	1000.000 ms
+124	192.168.124.1	1000.000 ms
+125	192.168.125.1	1000.000 ms
+126	192.168.126.1	1000.000 ms
+127	192.168.127.1	1000.000 ms
+128	192.168.128.1	1000.000 ms
+129	192.168.129.1	1000.000 ms
+130	192.168.130.1	1000.000 ms
+131	192.168.131.1	1000.000 ms
+132	192.168.132.1	1000.000 ms
+133	192.168.133.1	1000.000 ms
+134	192.168.134.1	1000.000 ms
+135	192.168.135.1	1000.000 ms
+136	192.168.136.1	1000.000 ms
+137	192.168.137.1	1000.000 ms
+138	192.168.138.1	1000.000 ms
+139	192.168.139.1	1000.000 ms
+140	192.168.140.1	1000.000 ms
+141	192.168.141.1	1000.000 ms
+142	192.168.142.1	1000.000 ms
+143	192.168.143.1	1000.000 ms
+144	192.168.144.1	1000.000 ms
+145	192.168.145.1	1000.000 ms
+146	192.168.146.1	1000.000 ms
+147	192.168.147.1	1000.000 ms
+148	192.168.148.1	1000.000 ms
+149	192.168.149.1	1000.000 ms
+150	192.168.150.1	1000.000 ms
+151	192.168.151.1	1000.000 ms
+152	192.168.152.1	1000.000 ms
+153	192.168.153.1	1000.000 ms
+154	192.168.154.1	1000.000 ms
+155	192.168.155.1	1000.000 ms
+156	192.168.156.1	1000.000 ms
+157	192.168.157.1	1000.000 ms
+158	192.168.158.1	1000.000 ms
+159	192.168.159.1	1000.000 ms
+160	192.168.160.1	1000.000 ms
+161	192.168.161.1	1000.000 ms
+162	192.168.162.1	1000.000 ms
+163	192.168.163.1	1000.000 ms
+164	192.168.164.1	1000.000 ms
+165	192.168.165.1	1000.000 ms
+166	192.168.166.1	1000.000 ms
+167	192.168.167.1	1000.000 ms
+168	192.168.168.1	1000.000 ms
+169	192.168.169.1	1000.000 ms
+170	192.168.170.1	1000.000 ms
+171	192.168.171.1	1000.000 ms
+172	192.168.172.1	1000.000 ms
+173	192.168.173.1	1000.000 ms
+174	192.168.174.1	1000.000 ms
+175	192.168.175.1	1000.000 ms
+176	192.168.176.1	1000.000 ms
+177	192.168.177.1	1000.000 ms
+178	192.168.178.1	1000.000 ms
+179	192.168.179.1	1000.000 ms
+180	192.168.180.1	1000.000 ms
+181	192.168.181.1	1000.000 ms
+182	192.168.182.1	1000.000 ms
+183	192.168.183.1	1000.000 ms
+184	192.168.184.1	1000.000 ms
+185	192.168.185.1	1000.000 ms
+186	192.168.186.1	1000.000 ms
+187	192.168.187.1	1000.000 ms
+188	192.168.188.1	1000.000 ms
+189	192.168.189.1	1000.000 ms
+190	192.168.190.1	1000.000 ms
+191	192.168.191.1	1000.000 ms
+192	192.168.192.1	1000.000 ms
+193	192.168.193.1	1000.000 ms
+194	192.168.194.1	1000.000 ms
+195	192.168.195.1	1000.000 ms
+196	192.168.196.1	1000.000 ms
+197	192.168.197.1	1000.000 ms
+198	192.168.198.1	1000.000 ms
+199	192.168.199.1	1000.000 ms
+200	192.168.200.1	1000.000 ms
+201	192.168.201.1	1000.000 ms
+202	192.168.202.1	1000.000 ms
+203	192.168.203.1	1000.000 ms
+204	192.168.204.1	1000.000 ms
+205	192.168.205.1	1000.000 ms
+206	192.168.206.1	1000.000 ms
+207	192.168.207.1	1000.000 ms
+208	192.168.208.1	1000.000 ms
+209	192.168.209.1	1000.000 ms
+210	192.168.210.1	1000.000 ms
+211	192.168.211.1	1000.000 ms
+212	192.168.212.1	1000.000 ms
+213	192.168.213.1	1000.000 ms
+214	192.168.214.1	1000.000 ms
+215	192.168.215.1	1000.000 ms
+216	192.168.216.1	1000.000 ms
+217	192.168.217.1	1000.000 ms
+218	192.168.218.1	1000.000 ms
+219	192.168.219.1	1000.000 ms
+220	192.168.220.1	1000.000 ms
+221	192.168.221.1	1000.000 ms
+222	192.168.222.1	1000.000 ms
+223	192.168.223.1	1000.000 ms
+224	192.168.224.1	1000.000 ms
+225	192.168.225.1	1000.000 ms
+226	192.168.226.1	1000.000 ms
+227	192.168.227.1	1000.000 ms
+228	192.168.228.1	1000.000 ms
+229	192.168.229.1	1000.000 ms
+230	192.168.230.1	1000.000 ms
+231	192.168.231.1	1000.000 ms
+232	192.168.232.1	1000.000 ms
+233	192.168.233.1	1000.000 ms
+234	192.168.234.1	1000.000 ms
+235	192.168.235.1	1000.000 ms
+236	192.168.236.1	1000.000 ms
+237	192.168.237.1	1000.000 ms
+238	192.168.238.1	1000.000 ms
+239	192.168.239.1	1000.000 ms
+240	192.168.240.1	1000.000 ms
+241	192.168.241.1	1000.000 ms
+242	192.168.242.1	1000.000 ms
+243	192.168.243.1	1000.000 ms
+244	192.168.244.1	1000.000 ms
+245	192.168.245.1	1000.000 ms
+246	192.168.246.1	1000.000 ms
+247	192.168.247.1	1000.000 ms
+248	192.168.248.1	1000.000 ms
+249	192.168.249.1	1000.000 ms
+250	192.168.250.1	1000.000 ms
+251	192.168.251.1	1000.000 ms
+252	192.168.252.1	1000.000 ms
+253	192.168.253.1	1000.000 ms
+254	192.168.254.1	1000.000 ms
+255	192.168.255.1	1000.000 ms
+stop reason: stop_hoplimit
+"
+    else nil
+    end
+  end
+  
+end #TraceTestTopologyPathLengthTest
+
+class TraceTestTopologyMultipleResponsesTest
+
+  def initialize
+    @test_number = 1
+  end
+
+  def to_s
+    "TraceTest Topology Multiple Responses Test"
+  end
+
+  def execute_all
+    execute_method_tests(:icmp)
+    execute_method_tests(:udp)
+    execute_method_tests(:tcp)
+  end
+
+  def execute_method_tests(method)
+    execute_test(method, :multiple_same_src)
+    execute_test(method, :multiple_diff_src)
+  end
+
+  def execute_test(method, type)
+    test_name = "#{self.to_s} (#{method}, #{type})"
+    puts "Executing #{test_name}" if $options.verbose
+
+    # 'work out' some of the features of our path
+    path_length = 8 #rand(20) + 5
+    multiple_resp_hop = path_length - 3
+    multiple_resp_cnt = 100
+    source = TraceTest.generate_ip(0,0)
+    target = TraceTest.generate_ip(path_length,1)
+    time = Time.now
+    taskid = @test_number
+    @test_number += 1
+    reqnum = 1
+
+    puts "Path Length: #{path_length}" if $options.verbose
+    puts "Source: #{source}" if $options.verbose
+    puts "Destination: #{target}" if $options.verbose
+
+    $options.probe_method = method
+
+    task = TraceTask.new(taskid, target, $options)
+
+    while !task.is_complete && (probe = task.next_probe) != nil
+      # create a response and pass it back to the task
+      probe.id = reqnum
+      #puts probe
+
+      probe.result = result = TestResult.new(reqnum, source, probe.dest, 
+                                            probe.ttl, time, probe.attempt)
+      reqnum += 1
+      time += 10
+      
+      result.responded = true
+      result.reply_icmp = true
+
+      result.reply_icmp_type = 11
+      result.reply_icmp_code = 0
+
+      if probe.ttl == path_length
+        # match the address
+        result.reply_src = target
+        if method == :icmp
+          result.reply_icmp_type = 0
+          result.reply_icmp_code = 0
+        else
+          result.reply_icmp_type = 3
+          result.reply_icmp_code = 3
+        end
+        task.receive_probe(probe)
+      elsif probe.ttl == multiple_resp_hop
+        multiple_resp_cnt.times do |i|
+          probe.result = TestResult.new(reqnum, source, probe.dest, 
+                                       probe.ttl, time, probe.attempt)
+          probe.result.responded = true
+          probe.result.reply_icmp = true
+          
+          probe.result.reply_icmp_type = 11
+          probe.result.reply_icmp_code = 0
+          if type == :multiple_diff_src
+            probe.result.reply_src = TraceTest.generate_ip(probe.ttl, i+1)
+          end
+          task.receive_probe(probe)
+        end
+      else
+        task.receive_probe(probe)
+      end
+
+    end
+
+    puts task.result if $options.verbose
+    
+    if task.result.to_s == expected_result(method, type)
+      puts "#{test_name} passed"
+    else
+      puts "#{test_name} failed"
+      puts task.result
+    end
+
+  end
+
+  def expected_result(method, type)
+    if type == :multiple_diff_src
+      return "traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+	192.168.5.2	1000.000 ms
+	192.168.5.3	1000.000 ms
+	192.168.5.4	1000.000 ms
+	192.168.5.5	1000.000 ms
+	192.168.5.6	1000.000 ms
+	192.168.5.7	1000.000 ms
+	192.168.5.8	1000.000 ms
+	192.168.5.9	1000.000 ms
+	192.168.5.10	1000.000 ms
+	192.168.5.11	1000.000 ms
+	192.168.5.12	1000.000 ms
+	192.168.5.13	1000.000 ms
+	192.168.5.14	1000.000 ms
+	192.168.5.15	1000.000 ms
+	192.168.5.16	1000.000 ms
+	192.168.5.17	1000.000 ms
+	192.168.5.18	1000.000 ms
+	192.168.5.19	1000.000 ms
+	192.168.5.20	1000.000 ms
+	192.168.5.21	1000.000 ms
+	192.168.5.22	1000.000 ms
+	192.168.5.23	1000.000 ms
+	192.168.5.24	1000.000 ms
+	192.168.5.25	1000.000 ms
+	192.168.5.26	1000.000 ms
+	192.168.5.27	1000.000 ms
+	192.168.5.28	1000.000 ms
+	192.168.5.29	1000.000 ms
+	192.168.5.30	1000.000 ms
+	192.168.5.31	1000.000 ms
+	192.168.5.32	1000.000 ms
+	192.168.5.33	1000.000 ms
+	192.168.5.34	1000.000 ms
+	192.168.5.35	1000.000 ms
+	192.168.5.36	1000.000 ms
+	192.168.5.37	1000.000 ms
+	192.168.5.38	1000.000 ms
+	192.168.5.39	1000.000 ms
+	192.168.5.40	1000.000 ms
+	192.168.5.41	1000.000 ms
+	192.168.5.42	1000.000 ms
+	192.168.5.43	1000.000 ms
+	192.168.5.44	1000.000 ms
+	192.168.5.45	1000.000 ms
+	192.168.5.46	1000.000 ms
+	192.168.5.47	1000.000 ms
+	192.168.5.48	1000.000 ms
+	192.168.5.49	1000.000 ms
+	192.168.5.50	1000.000 ms
+	192.168.5.51	1000.000 ms
+	192.168.5.52	1000.000 ms
+	192.168.5.53	1000.000 ms
+	192.168.5.54	1000.000 ms
+	192.168.5.55	1000.000 ms
+	192.168.5.56	1000.000 ms
+	192.168.5.57	1000.000 ms
+	192.168.5.58	1000.000 ms
+	192.168.5.59	1000.000 ms
+	192.168.5.60	1000.000 ms
+	192.168.5.61	1000.000 ms
+	192.168.5.62	1000.000 ms
+	192.168.5.63	1000.000 ms
+	192.168.5.64	1000.000 ms
+	192.168.5.65	1000.000 ms
+	192.168.5.66	1000.000 ms
+	192.168.5.67	1000.000 ms
+	192.168.5.68	1000.000 ms
+	192.168.5.69	1000.000 ms
+	192.168.5.70	1000.000 ms
+	192.168.5.71	1000.000 ms
+	192.168.5.72	1000.000 ms
+	192.168.5.73	1000.000 ms
+	192.168.5.74	1000.000 ms
+	192.168.5.75	1000.000 ms
+	192.168.5.76	1000.000 ms
+	192.168.5.77	1000.000 ms
+	192.168.5.78	1000.000 ms
+	192.168.5.79	1000.000 ms
+	192.168.5.80	1000.000 ms
+	192.168.5.81	1000.000 ms
+	192.168.5.82	1000.000 ms
+	192.168.5.83	1000.000 ms
+	192.168.5.84	1000.000 ms
+	192.168.5.85	1000.000 ms
+	192.168.5.86	1000.000 ms
+	192.168.5.87	1000.000 ms
+	192.168.5.88	1000.000 ms
+	192.168.5.89	1000.000 ms
+	192.168.5.90	1000.000 ms
+	192.168.5.91	1000.000 ms
+	192.168.5.92	1000.000 ms
+	192.168.5.93	1000.000 ms
+	192.168.5.94	1000.000 ms
+	192.168.5.95	1000.000 ms
+	192.168.5.96	1000.000 ms
+	192.168.5.97	1000.000 ms
+	192.168.5.98	1000.000 ms
+	192.168.5.99	1000.000 ms
+	192.168.5.100	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+stop reason: stop_completed
+"
+    elsif type == :multiple_same_src
+      return "traceroute to 192.168.8.1
+1	192.168.1.1	1000.000 ms
+2	192.168.2.1	1000.000 ms
+3	192.168.3.1	1000.000 ms
+4	192.168.4.1	1000.000 ms
+5	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+	192.168.5.1	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+stop reason: stop_completed
+"
+    else nil
+    end
+  end
+  
+end #TraceTestTopologyMultipleResponsesTest
+
+class TraceTestLoopTestSet
+
+  def initialize
+    @tests = []
+    @tests << TraceTestLoopTest.new
+  end
+
+  def execute_all
+    @tests.each do |test|
+      test.execute_all
+    end
+  end
+
+  def to_s
+    "TraceTest Topology Test Set"
+  end
+
+end #TraceTestTopologyTestSet
+
+class TraceTestLoopTest
+
+  def initialize
+    @test_number = 1
+  end
+
+  def to_s
+    "TraceTest Loop Test"
+  end
+
+  def execute_all
+    execute_method_tests(:icmp)
+    execute_method_tests(:udp)
+    execute_method_tests(:tcp)
+  end
+
+  def execute_method_tests(method)
+    execute_test(method, :general_loop_ABCA_disallow)
+    execute_test(method, :general_loop_ABCA_allow)
+    execute_test(method, :adjacent_loop_ABBC_disallow)
+    execute_test(method, :adjacent_loop_ABBC_allow)
+    execute_test(method, :adjacent_loop_ABBCZDDE_disallow)
+    execute_test(method, :adjacent_loop_ABBCZDDE_allow)
+    execute_test(method, :adjacent_loop_ABBCC__E_disallow)
+    execute_test(method, :adjacent_loop_ABBCC__E_allow)
+    execute_test(method, :adjacent_loop_mnlph_disallow)
+    execute_test(method, :adjacent_loop_mnlph_allow)
+    execute_test(method, :combo_loop_ABBCA_disallow)
+    execute_test(method, :combo_loop_ABBCA_allow_adjacent)
+    execute_test(method, :combo_loop_ABBCA_allow_both)
+  end
+
+  def execute_test(method, type)
+    test_name = "#{self.to_s} (#{method}, #{type})"
+    puts "Executing #{test_name}" if $options.verbose
+
+    # 'work out' some of the features of our path
+    path_length = 12 #rand(20) + 5
+    loop_start = 2
+    source = TraceTest.generate_ip(0,0)
+    target = TraceTest.generate_ip(path_length,1)
+    time = Time.now
+    taskid = @test_number
+    @test_number += 1
+    reqnum = 1
+
+    puts "Path Length: #{path_length}" if $options.verbose
+    puts "Source: #{source}" if $options.verbose
+    puts "Destination: #{target}" if $options.verbose
+
+    $options.probe_method = method
+
+    #reset to the defaults
+    $options.loops = 1
+    $options.loopaction = 0
+
+    case type
+    when :general_loop_ABCA_disallow:
+        $options.loops = 1
+      loop = ["A", "B", "C", "A"]
+    when :general_loop_ABCA_allow:
+        $options.loops = 0
+      loop = ["A", "B", "C", "A"]
+    when :adjacent_loop_ABBC_disallow:
+        $options.loopaction = 0
+      loop = ["A", "B", "B", "C"]
+    when :adjacent_loop_ABBC_allow:
+        $options.loopaction = 1
+      loop = ["A", "B", "B", "C"]
+    when :adjacent_loop_ABBCZDDE_disallow:
+        $options.loopaction = 1
+      loop = ["A", "B", "B", "C", "Z", "D", "D", "E"]
+    when :adjacent_loop_ABBCZDDE_allow:
+        $options.loopaction = 2
+      loop = ["A", "B", "B", "C", "Z", "D", "D", "E"]
+    when :adjacent_loop_ABBCC__E_disallow:
+        $options.loopaction = 1
+      loop = ["A", "B", "B", "C", "C", nil, nil, "E"]
+    when :adjacent_loop_ABBCC__E_allow:
+        $options.loopaction = 2
+      loop = ["A", "B", "B", "C", "C", nil, nil, "E"]
+    when :adjacent_loop_mnlph_disallow:
+        $options.loopaction = 1
+      loop_start = 1
+      path_length = 21
+      loop = ["202.90.149.65", "203.177.10.245", "120.28.0.149", "120.28.0.129",
+              "120.28.0.10", "120.28.0.46", "120.29.217.29", "180.87.180.41", 
+              "180.87.180.26", "180.87.12.54", "180.87.36.14", "116.0.79.34", 
+              "59.163.16.121", "59.163.16.121", "172.31.55.222", 
+              "172.31.55.222", nil, nil, nil, nil, nil, nil, nil, nil, nil, 
+              nil, nil, nil, nil, nil, nil]
+    when :adjacent_loop_mnlph_allow:
+        $options.loopaction = 2
+      loop_start = 1
+      path_length = 21
+      loop = ["202.90.149.65", "203.177.10.245", "120.28.0.149", "120.28.0.129",
+              "120.28.0.10", "120.28.0.46", "120.29.217.29", "180.87.180.41", 
+              "180.87.180.26", "180.87.12.54", "180.87.36.14", "116.0.79.34", 
+              "59.163.16.121", "59.163.16.121", "172.31.55.222", 
+              "172.31.55.222", nil, nil, nil, nil, nil, nil, nil, nil, nil, 
+              nil, nil, nil, nil, nil, nil]
+    when :combo_loop_ABBCA_disallow:
+        $options.loops = 1
+      $options.loopaction = 0
+      loop = ["A", "B", "B", "C", "A"]
+    when :combo_loop_ABBCA_allow_adjacent:
+        $options.loops = 1
+      $options.loopaction = 1
+      loop = ["A", "B", "B", "C", "A"]
+    when :combo_loop_ABBCA_allow_both:
+        $options.loops = 0
+      $options.loopaction = 1
+      loop = ["A", "B", "B", "C", "A"]
+    else raise "invalid type flag #{type}"
+    end
+
+    task = TraceTask.new(taskid, target, $options)
+
+    while !task.is_complete && (probe = task.next_probe) != nil
+      # create a response and pass it back to the task
+      probe.id = reqnum
+      #puts probe
+
+      probe.result = result = TestResult.new(reqnum, source, probe.dest, 
+                                            probe.ttl, time, probe.attempt)
+      reqnum += 1
+      time += 10
+      
+      result.responded = true
+      result.reply_icmp = true
+      result.reply_icmp_type = 11
+      result.reply_icmp_code = 0
+
+      if probe.ttl == path_length
+        # match the address
+        result.reply_src = target
+        if method == :icmp
+          result.reply_icmp_type = 0
+          result.reply_icmp_code = 0
+        else
+          result.reply_icmp_type = 3
+          result.reply_icmp_code = 3
+        end
+          
+      elsif probe.ttl >= loop_start && loop.length > 0
+        result.reply_src = loop.shift
+        unless result.reply_src
+          result.responded = false
+        end
+      end
+
+      task.receive_probe(probe)
+
+    end
+
+    puts task.result if $options.verbose
+
+    if task.result.to_s == expected_result(method, type)
+      puts "#{test_name} passed"
+    else
+      puts "#{test_name} failed"
+      puts task.result
+    end
+
+  end
+
+  def expected_result(method, type)
+    case type
+    when :general_loop_ABCA_disallow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	C	1000.000 ms
+5	A	1000.000 ms
+stop reason: stop_loop
+"
+    when :general_loop_ABCA_allow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	C	1000.000 ms
+5	A	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    when :adjacent_loop_ABBC_disallow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+stop reason: stop_loop
+"
+    when :adjacent_loop_ABBC_allow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	192.168.6.1	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    when :adjacent_loop_ABBCZDDE_disallow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	Z	1000.000 ms
+7	D	1000.000 ms
+8	D	1000.000 ms
+stop reason: stop_loop
+"
+    when :adjacent_loop_ABBCZDDE_allow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	Z	1000.000 ms
+7	D	1000.000 ms
+8	D	1000.000 ms
+9	E	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    when :combo_loop_ABBCA_disallow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+stop reason: stop_loop
+"
+    when :combo_loop_ABBCA_allow_adjacent:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	A	1000.000 ms
+stop reason: stop_loop
+"
+    when :combo_loop_ABBCA_allow_both:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	A	1000.000 ms
+7	192.168.7.1	1000.000 ms
+8	192.168.8.1	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    when :adjacent_loop_ABBCC__E_disallow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	C	1000.000 ms
+stop reason: stop_loop
+"
+    when :adjacent_loop_ABBCC__E_allow:
+        return "traceroute to 192.168.12.1
+1	192.168.1.1	1000.000 ms
+2	A	1000.000 ms
+3	B	1000.000 ms
+4	B	1000.000 ms
+5	C	1000.000 ms
+6	C	1000.000 ms
+7	*
+	*
+8	E	1000.000 ms
+9	192.168.9.1	1000.000 ms
+10	192.168.10.1	1000.000 ms
+11	192.168.11.1	1000.000 ms
+12	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    when :adjacent_loop_mnlph_disallow:
+        return "traceroute to 192.168.12.1
+1	202.90.149.65	1000.000 ms
+2	203.177.10.245	1000.000 ms
+3	120.28.0.149	1000.000 ms
+4	120.28.0.129	1000.000 ms
+5	120.28.0.10	1000.000 ms
+6	120.28.0.46	1000.000 ms
+7	120.29.217.29	1000.000 ms
+8	180.87.180.41	1000.000 ms
+9	180.87.180.26	1000.000 ms
+10	180.87.12.54	1000.000 ms
+11	180.87.36.14	1000.000 ms
+12	116.0.79.34	1000.000 ms
+13	59.163.16.121	1000.000 ms
+14	59.163.16.121	1000.000 ms
+15	172.31.55.222	1000.000 ms
+16	172.31.55.222	1000.000 ms
+stop reason: stop_loop
+"
+    when :adjacent_loop_mnlph_allow:
+        return "traceroute to 192.168.12.1
+1	202.90.149.65	1000.000 ms
+2	203.177.10.245	1000.000 ms
+3	120.28.0.149	1000.000 ms
+4	120.28.0.129	1000.000 ms
+5	120.28.0.10	1000.000 ms
+6	120.28.0.46	1000.000 ms
+7	120.29.217.29	1000.000 ms
+8	180.87.180.41	1000.000 ms
+9	180.87.180.26	1000.000 ms
+10	180.87.12.54	1000.000 ms
+11	180.87.36.14	1000.000 ms
+12	116.0.79.34	1000.000 ms
+13	59.163.16.121	1000.000 ms
+14	59.163.16.121	1000.000 ms
+15	172.31.55.222	1000.000 ms
+16	172.31.55.222	1000.000 ms
+17	*
+	*
+18	*
+	*
+19	*
+	*
+20	*
+	*
+21	192.168.12.1	1000.000 ms
+stop reason: stop_completed
+"
+    else raise "invalid type flag #{type}"
+    end
+
+  end
+  
+end #TraceTestLoopTest
+
+#==============================================================================
+# TestResult
+# 
+# TestResult is a re-creation of PingResult which allows PingResult objects
+# to be forged by the TraceTestTest classes for returning to TraceTask
+#==============================================================================
+class TestResult
+  attr_accessor :reqnum
+  attr_accessor :probe_src, :probe_dest, :udata
+  attr_accessor :tx_sec, :tx_usec, :rx_sec, :rx_usec
+  attr_accessor :probe_ttl, :probe_ipid, :reply_src, :reply_ttl, :reply_qttl
+  attr_accessor :reply_rr
+  attr_accessor :reply_tsps_ts1, :reply_tsps_ip1
+  attr_accessor :reply_tsps_ts2, :reply_tsps_ip2
+  attr_accessor :reply_tsps_ts3, :reply_tsps_ip3
+  attr_accessor :reply_tsps_ts4, :reply_tsps_ip4
+  attr_accessor :reply_ipid
+
+  attr_accessor :responded
+  attr_accessor :reply_icmp_type, :reply_icmp_code, :reply_icmp
+  attr_accessor :reply_tcp
+
+  @@ipid = 0
+
+  def initialize(reqnum, src, dest, ttl, time, attempt)
+    self.reqnum = reqnum
+    self.probe_src = src
+    self.probe_dest = dest
+
+    self.tx_sec = time.to_i
+    self.tx_usec = 0
+    time += 1
+    self.rx_sec = time.to_i
+    self.rx_usec = 0
+
+    self.probe_ttl = ttl
+    self.reply_src = TraceTest.generate_ip(ttl, attempt)
+    self.reply_ttl = rand(255)
+    self.reply_qttl = ttl
+
+    self.reply_ipid = @@ipid
+    @@ipid += 1
+  end
+  
+  def responded?
+    @responded
+  end
+  
+  def icmp_reply?
+    @reply_icmp != nil
+  end
+  
+  def tcp_reply?
+    @reply_tcp != nil
+  end
+  
+  #def reply_icmp_type
+  #  @reply_icmp ? @reply_icmp >> 8 : nil
+  #end
+  
+  #def reply_icmp_code
+  #  @reply_icmp ? @reply_icmp & 0xff : nil
+  #end
+  
+  def reply_tcp_flags
+    @reply_tcp
+  end
+  
+  # Just a convenience function.  This returns the same strings as warts-dump.
+  def decompose_tcp_flags
+    return nil unless @reply_tcp
+    retval = []
+    retval << "fin" if (@reply_tcp & 0x01) != 0
+    retval << "syn" if (@reply_tcp & 0x02) != 0
+    retval << "rst" if (@reply_tcp & 0x04) != 0
+    retval << "psh" if (@reply_tcp & 0x08) != 0
+    retval << "ack" if (@reply_tcp & 0x10) != 0
+    retval << "urg" if (@reply_tcp & 0x20) != 0
+    retval << "ece" if (@reply_tcp & 0x40) != 0
+    retval << "cwr" if (@reply_tcp & 0x80) != 0
+    retval
+  end
+end #TestResult
+
+################################################################################
+
+if $options.wartsfile
+  simulator = TraceSim.new
+  simulator.start
+else
+  tester = TraceTest.new
+  tester.start
+end
+
