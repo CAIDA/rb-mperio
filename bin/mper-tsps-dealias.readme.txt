@@ -277,59 +277,62 @@ P4S		Four Stamps
 
 FR[DGU]		Reverse Path
 
-Sample output for a dealiasing run with 202,409 pairs is shown below.
+Sample output for a dealiasing run with 1000 pairs is shown below.
 
 --------------------------------------------------------------------------------
 
-Total candidate pairs: 202409
-Total interfaces tested for suitability: 404818
+Total candidate pairs: 1000
+Total interfaces tested for suitability: 2000
 
 Suitability Stats:
 Probing for (D|DXXX) and (D|DDDD)
 Classification	# IPs	% of IPs
 ======|FAILURE CONDITIONS|======
-Unresponsive	149725	36.99%
-Inconsistent	50972	12.59%
-Extra Stamp	1282	0.32%
-Zero Stamps	69983	17.29%
-One Stamp	61186	15.11%
+Unresponsive	791	39.55%
+Inconsistent	327	16.35%
+Extra Stamp	7	0.35%
+Zero Stamps	277	13.85%
+One Stamp	286	14.30%
 =======|PASS CONDITIONS|========
-Two Stamps	23150	5.72%
-Three Stamps	35	0.01%
-Four Stamps	48485	11.98%
+Two Stamps	156	7.80%
+Three Stamps	0	0.00%
+Four Stamps	156	7.80%
 --------------------------------
-TOTAL		404818	100%
+TOTAL		2000	100%
 ================================
-Number of pairs which passed suitability check: 23818
+Number of pairs which passed suitability check: 73
 
 
 Probe Response Stats:
 Resp/Atmpt	Frequency
 ------------------------
-0/5		145757	*
-1/5		3968	* both included in 'Unresponsive' count above
-2/5		4332
-3/5		5846
-4/5		8181
-5/5		236734
+0/5		779	*
+1/5		12	* both included in 'Unresponsive' count above
+2/5		9
+3/5		16
+4/5		22
+5/5		1162
 
 Alias Validity Check Stats:
 Probing (A|ABAB) for each IP
 Classification	# IPs	% of IPs
 ======|FAILURE CONDITIONS|======
-Unresponsive	20	0.04%
-Inconsistent	31	0.07%
+Unresponsive	0	0.00%
+Inconsistent	0	0.00%
 No Stamp	0	0.00%
-One Stamp	2566	5.39%
-Reverse Path	195	0.41%
+One Stamp	12	8.22%
+RP TS Decrease	0	0.00%
+RP TS Gap	0	0.00%
+RP TS Unknown	0	0.00%
 =======|PASS CONDITIONS|========
-Two Stamp	1362	2.86%
-Three Stamp	24	0.05%
-Four Stamp	43438	91.19%
+Two Stamp	6	4.11%
+Three Stamp	0	0.00%
+Four Stamp	128	87.67%
 --------------------------------
-TOTAL		47636	100%
+TOTAL		146	100%
 ================================
-Number of pairs which passed validity check: 22388
+Number of pairs which passed validity check: 67
+
 
 
 ===STATS BELOW HERE ARE FOR PAIRS===
@@ -341,13 +344,18 @@ Classification	# Pairs	% of Pairs
 ======|FAILURE CONDITIONS|======
 Unresponsive	0	0.00%
 Inconsistent	0	0.00%
-No Stamp	0	0.00%
-1 Stamp (ERR)	5	45.45%
-2 Stamp (UNK)	1	9.09%
-3 Stamp (NON)	5	45.45%
+2 Stamp (Dec)	0	0.00%
+2 Stamp (Gap)	0	0.00%
+2 Stamp (Unk)	0	0.00%
+3 Stamp (Dec)	0	0.00%
+3 Stamp (Gap)	0	0.00%
+3 Stamp (Unk)	0	0.00%
 4 Stamp (ERR)	0	0.00%
+=======|PASS CONDITIONS|========
+No Stamp	0	0.00%
+1 Stamp		0	0.00%
 --------------------------------
-TOTAL		11	100%
+TOTAL		0	0%
 ================================
 
 
@@ -355,13 +363,13 @@ Alias Check Stats:
 Probing (A|ABAB) and (B|BABA)
 Classification	# Pairs	% of Pairs
 ======|FAILURE CONDITIONS|======
-<5 Replies	45	0.20%
+<5 Replies	0	0.00%
 Three Stamps	0	0.00%
 =======|PASS CONDITIONS|========
-Two Stamps	673	3.01%
-Four Stamps	21655	96.79%
+Two Stamps	3	4.48%
+Four Stamps	64	95.52%
 --------------------------------
-TOTAL		22373	100%
+TOTAL		67	100%
 ================================
 
 Shared Clock Check Stats:
@@ -369,155 +377,104 @@ Timestamps from (A|ABAB) and (B|BABA)
 Classification	# Pairs	% of Pairs
 ======|FAILURE CONDITIONS|======
 Decreasing TS	0	0.00%
-TS Variance	30	4.46%
+TS Variance	0	0.00%
 =======|PASS CONDITIONS|========
-Shared Clock	447	66.42%
-Midnight/Epoch	196	29.12%
+Shared Clock	3	100.00%
+Midnight/Epoch	0	0.00%
 --------------------------------
-TOTAL		673	100%
+TOTAL		3	100%
 ================================
 
 Distance/Loop Check Stats:
 Classification	# Pairs	% of Pairs
 ======|FAILURE CONDITIONS|======
-Unresponsive	3	0.47%
-TTL Variance	8	1.24%
-Distance	32	4.98%
+Unresponsive	0	0.00%
+TTL Variance	0	0.00%
+Distance	1	33.33%
 =======|PASS CONDITIONS|========
-Distance	600	93.31%
+Distance	2	66.67%
 --------------------------------
-TOTAL		643	100%
+TOTAL		3	100%
 ================================
 
 Overall Verdicts:
-Classification	# Pairs	% of Pairs
+Classification		# Pairs	% of Pairs
 =========|FAILURE CONDITIONS|=========
-Non-Alias		200	0.10%
-Ineligible		175804	86.86%
-Unknown			0	0.00%
-Unknown Reprobe		4082	2.02%
+Non-Alias Strong	0	0.00%
+Non-Alias Weak		0	0.00%
+Ineligible		914	91.40%
+Unknown			7	0.70%
+Unknown Reprobe		13	1.30%
 Unknown Alias		0	0.00%
-Unknown Non-Alias	63	0.03%
-Error			5	0.00%
+Unknown Non-Alias	0	0.00%
+Error			0	0.00%
 ==========|PASS CONDITIONS|===========
-Alias			22255	11.00%
+Alias			64	6.40%
+Alias Weak		2	0.20%
+Alias Strong		0	0.00%
 --------------------------------------
-TOTAL			202409	100%
+TOTAL			1000	100%
 ======================================
 
---------------------------------------------------------------------------------
-Additional histograms which are displayed when the script is called with the
---histogram option:
 
+--------------------------------------------------------------------------------
+If the script is called with the --histogram option, it will display three
+additional histograms which can be useful for determining the causes of various
+results.
 
 Pairs which contain one pass interface and one fail interface:
-P2S		21592	89.84%
-	F1S	13488	56.12%
-	FNS	4694	19.53%
-	FNR	2088	8.69%
-	FVS	1301	5.41%
-	FES	21	0.09%
+P2S		150	90.36%
+	F1S	90	54.22%
+	FNS	35	21.08%
+	FNR	17	10.24%
+	FVS	8	4.82%
 
-P3S		9	0.04%
-	FNR	5	0.02%
-	F1S	3	0.01%
-	FNS	1	0.00%
+P4S		16	9.64%
+	FNR	13	7.83%
+	FNS	2	1.20%
+	FVS	1	0.60%
 
-P4S		2433	10.12%
-	FNR	1886	7.85%
-	FNS	485	2.02%
-	F1S	36	0.15%
-	FVS	16	0.07%
-	FES	10	0.04%
+-- Shows the type of address that a passing address was paired with which caused
+   the pair to be rejected after suitability testing. In this case, the majority
+   of pairs for which one address was suitable but not the other are two
+   stampers being paired with one a one stamper.
 
 
 Pairings which pass suitability check:
-P2S		788	3.31%
-	P2S	770	3.23%
-	P4S	16	0.07%
-	P3S	2	0.01%
+P2S		3	4.11%
+	P2S	3	4.11%
 
-P3S		12	0.05%
-	P3S	12	0.05%
+P4S		70	95.89%
+	P4S	70	95.89%
 
-P4S		23018	96.64%
-	P4S	23018	96.64%
+-- Similar to the above table, but provides an indication of what an address is
+   usually paired with when they passed the suitability check. In this case we
+   never see a four stamper paired with a two stamper passing suitability
+   checking.
+
 
 Mapping from Suitability result to AVC result:
 Suit A	AVC A	Suit B	AVC B	Count	%
-P2S				1558	3.27%
-	P2S			1362	87.42%
-		P2S		1355	99.49%
-			P2S	1346	99.34%
-			F1S	6	0.44%
-			FVS	2	0.15%
-			FNR	1	0.07%
-		P4S		5	0.37%
-			F1S	3	60.00%
-			FRP	2	40.00%
-		P3S		2	0.15%
-			F1S	2	100.00%
-	F1S			184	11.81%
-		P2S		174	94.57%
-			F1S	164	94.25%
-			P2S	6	3.45%
-			FVS	3	1.72%
-			FNR	1	0.57%
-		P4S		10	5.43%
-			F1S	9	90.00%
-			P4S	1	10.00%
-	FVS			10	0.64%
-		P2S		9	90.00%
-			FVS	4	44.44%
-			F1S	3	33.33%
-			P2S	2	22.22%
-		P4S		1	10.00%
-			F1S	1	100.00%
-	FNR			2	0.13%
-		P2S		2	100.00%
-			P2S	1	50.00%
-			F1S	1	50.00%
+P2S				6	4.11%
+	P2S			6	100.00%
+		P2S		6	100.00%
+			P2S	6	100.00%
 
-P3S				26	0.05%
-	P3S			24	92.31%
-		P3S		24	100.00%
-			P3S	24	100.00%
-	F1S			2	7.69%
-		P2S		2	100.00%
-			P2S	2	100.00%
+P4S				140	95.89%
+	P4S			128	91.43%
+		P4S		128	100.00%
+			P4S	128	100.00%
+	F1S			12	8.57%
+		P4S		12	100.00%
+			F1S	12	100.00%
 
-P4S				46052	96.67%
-	P4S			43438	94.32%
-		P4S		43437	100.00%
-			P4S	43400	99.91%
-			FNR	17	0.04%
-			F1S	15	0.03%
-			FVS	4	0.01%
-			FRP	1	0.00%
-		P2S		1	0.00%
-			F1S	1	100.00%
-	FRP			195	0.42%
-		P4S		193	98.97%
-			F1S	192	99.48%
-			P4S	1	0.52%
-		P2S		2	1.03%
-			P2S	2	100.00%
-	FVS			21	0.05%
-		P4S		21	100.00%
-			F1S	17	80.95%
-			P4S	4	19.05%
-	FNR			18	0.04%
-		P4S		18	100.00%
-			P4S	17	94.44%
-			F1S	1	5.56%
-	F1S			2380	5.17%
-		P4S		2367	99.45%
-			F1S	2142	90.49%
-			FRP	192	8.11%
-			FVS	17	0.72%
-			P4S	15	0.63%
-			FNR	1	0.04%
-		P2S		13	0.55%
-			F1S	9	69.23%
-			P2S	3	23.08%
-			FVS	1	7.69%
+
+-- Shows the relationship between the stamping behavior for (A|AAAA), (A|ABAB),
+   (B|BBBB) and (B|BABA). That is, an address which stamps four times in
+   suitability checking (A|AAAA), almost always stamps four times in the
+   validity check (A|ABAB), and when it does, the address that it is paired with
+   always stamps four times for both the suitability and validity checks.
+
+Note that these histograms ignore the ordering of the addresses, so a pair (X,Y)
+can appear as X -> Y as well as Y -> X. I.e. X can be both A and B in these
+histograms. 
