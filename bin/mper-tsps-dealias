@@ -1006,7 +1006,7 @@ class TspsDealiasAliasCheckTask
             if @stamps_a[:four_stamps] > 0 && @stamps_b[:four_stamps] > 0
               log(@message + " passed (4 stamps)")
               @dealias_result.alias_check = "P4S"
-              @dealias_result.overall = "ALIAS"
+              @dealias_result.overall = "ALIAS-STRONG-1"
               @state = :done
               return
             elsif (@stamps_a[:two_stamps] > 0 && 
@@ -1693,7 +1693,7 @@ class TspsDealiasDistanceTask
       if @dealias_result.ret_path
         @dealias_result.overall = "ALIAS-WEAK"
       else
-        @dealias_result.overall = "ALIAS-STRONG"
+        @dealias_result.overall = "ALIAS-STRONG-2"
       end
       @state = :done
       return
