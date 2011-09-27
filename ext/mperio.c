@@ -163,7 +163,7 @@ typedef struct {
 #define MPER_OPT_DEFAULT_TIMEOUT    5000
 #define MPER_OPT_DEFAULT_TTL        255
 #define MPER_OPT_DEFAULT_TOS        0x0
-#define MPER_OPT_DEFAULT_REPLY_CNT  0
+#define MPER_OPT_DEFAULT_REPLY_COUNT  0
 #define MPER_OPT_DEFAULT_ICMP_RR    0
 #define MPER_OPT_DEFAULT_ICMP_CKSUM 0
 */
@@ -172,7 +172,7 @@ typedef struct {
 #define OPT_TIMEOUT    0x00000002
 #define OPT_TTL        0x00000004
 #define OPT_TOS        0x00000010
-#define OPT_REPLY_CNT  0x00000020
+#define OPT_REPLY_COUNT  0x00000020
 #define OPT_SRC_ADDR   0x00000040
 
 #define OPT_ICMP_RR    0x00000100
@@ -971,7 +971,7 @@ static int process_options(VALUE options, int probe_method,
 	      *err_msg = "reply cnt must be between 0 and 2^16";
 	      goto err;
 	    }
-	  SET_OPT_FLAG(options_out, OPT_REPLY_CNT);
+	  SET_OPT_FLAG(options_out, OPT_REPLY_COUNT);
 	}
       else if(opt_type == sym_src_addr)
 	{
@@ -1140,9 +1140,9 @@ load_common_options(mperio_data_t *data, int option_index, options_t *options)
       SET_UINT_CWORD(data->words, option_index, TOS, options->tos);
       option_index++;
     }
-  if(IS_OPT(options, OPT_REPLY_CNT))
+  if(IS_OPT(options, OPT_REPLY_COUNT))
     {
-      SET_UINT_CWORD(data->words, option_index, REPLY_CNT, options->reply_cnt);
+      SET_UINT_CWORD(data->words, option_index, REPLY_COUNT, options->reply_cnt);
       option_index++;
     }
   if(IS_OPT(options, OPT_SRC_ADDR))
