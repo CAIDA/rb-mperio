@@ -117,7 +117,7 @@ typedef struct {
   uint32_t timeout;
   uint16_t ttl;
   uint16_t tos;
-  uint16_t reply_cnt;
+  uint16_t reply_count;
   char *src_addr;
 
   union
@@ -225,7 +225,7 @@ static ID meth_mperio_service_failure;
 
 /* common */
 static ID sym_spacing, sym_timeout, sym_ttl; 
-static ID sym_tos, sym_reply_cnt, sym_src_addr;
+static ID sym_tos, sym_reply_count, sym_src_addr;
 
 /* icmp */
 static ID sym_rr, sym_tsps, sym_cksum;
@@ -964,9 +964,9 @@ static int process_options(VALUE options, int probe_method,
 	    }
 	  SET_OPT_FLAG(options_out, OPT_TOS);
 	}
-      else if(opt_type == sym_reply_cnt)
+      else if(opt_type == sym_reply_count)
 	{
-	  if(!CHECK_PARSE_INT(options_out->reply_cnt, uint16_t, opt))
+	  if(!CHECK_PARSE_INT(options_out->reply_count, uint16_t, opt))
 	    {
 	      *err_msg = "reply cnt must be between 0 and 2^16";
 	      goto err;
@@ -1142,7 +1142,7 @@ load_common_options(mperio_data_t *data, int option_index, options_t *options)
     }
   if(IS_OPT(options, OPT_REPLY_COUNT))
     {
-      SET_UINT_CWORD(data->words, option_index, REPLY_COUNT, options->reply_cnt);
+      SET_UINT_CWORD(data->words, option_index, REPLY_COUNT, options->reply_count);
       option_index++;
     }
   if(IS_OPT(options, OPT_SRC_ADDR))
@@ -1713,7 +1713,7 @@ Init_mperio(void)
   SYM_INTERN(timeout);
   SYM_INTERN(ttl);
   SYM_INTERN(tos);
-  SYM_INTERN(reply_cnt);
+  SYM_INTERN(reply_count);
   SYM_INTERN(src_addr);
 
   SYM_INTERN(rr);

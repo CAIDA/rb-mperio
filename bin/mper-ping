@@ -84,7 +84,7 @@ end
 opts.on("--reply-count", "=NUM", Integer,
         "specifies the number of replies required at which time probing" \
         "may cease.  By default, all probes are sent.") do |v|
-  $options.reply_cnt = v
+  $options.reply_count = v
 end
 
 opts.on("--src", "=ADDR", String,
@@ -281,19 +281,19 @@ class Prober
         @mperio.ping_icmp @target_id.advance, target, 
         :spacing,  $options.spacing, :timeout, $options.timeout,
         :ttl, $options.ttl, :tos, $options.tos,
-        :reply_cnt, $options.reply_cnt, :src_addr, $options.src_addr,
+        :reply_count, $options.reply_count, :src_addr, $options.src_addr,
         :rr, $options.rr, :tsps, $options.tsps, :cksum, $options.cksum
       when :tcp
          @mperio.ping_tcp @target_id.advance, target, 
         :spacing,  $options.spacing, :timeout, $options.timeout,
         :ttl, $options.ttl, :tos, $options.tos,
-        :reply_cnt, $options.reply_cnt, :src_addr, $options.src_addr,
+        :reply_count, $options.reply_count, :src_addr, $options.src_addr,
         :dport, ($options.dport || 80)
       when :udp
         @mperio.ping_udp @target_id.advance, target, 
         :spacing,  $options.spacing, :timeout, $options.timeout,
         :ttl, $options.ttl, :tos, $options.tos,
-        :reply_cnt, $options.reply_cnt, :src_addr, $options.src_addr,
+        :reply_count, $options.reply_count, :src_addr, $options.src_addr,
          :dport, $options.dport
 
       else fail "INTERNAL ERROR: invalid probing method"
