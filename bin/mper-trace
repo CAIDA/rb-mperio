@@ -203,7 +203,7 @@ end
 
 opts.on("-R", "--recordroute", TrueClass,
         "enable the record route IP option (default: off)") do |v|
-  $options.rr = 1
+  $options.rr = true
 end
 
 #opts.on("-s", "--test", TrueClass,
@@ -475,7 +475,9 @@ class TraceManager
                        :src_addr, $options.src_addr,
                        :tos, $options.tos,
                        :timeout, $options.timeout,
-                       :spacing, $options.spacing)
+                       :spacing, $options.spacing,
+                       :tsps, $options.tsps,
+                       :rr, $options.rr)
 
     when :tcp
       @mperio.ping_tcp(probe.id, probe.dest, :ttl, probe.ttl,

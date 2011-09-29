@@ -198,6 +198,7 @@ typedef struct {
 						) || 1))
 #define PARSE_INT(type, opt) (NIL_P(opt) ? 0 : (type)NUM2UINT(opt))
 
+#define CHECK_PARSE_BOOL(out, opt) ((out = (RTEST(opt) ? 1 : 0)) || 1)
 
 #define CHECK_PARSE_STR(out, opt) ((rb_type(opt) == T_STRING) && \
 				   (out = RSTRING_PTR(opt)))
@@ -988,10 +989,11 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_rr)
 	    {
-	      if(!CHECK_PARSE_INT(options_out->icmp_rr, int, opt) ||
+	      if(!CHECK_PARSE_BOOL(options_out->icmp_rr, opt) ||
 		 (options_out->icmp_rr != 0 && options_out->icmp_rr != 1))
 		{
-		  *err_msg = "icmp_rr must be 0 (off) or 1 (on)";
+		  fprintf(stderr, "icmp_rr: %d\n", options_out->icmp_rr);
+		  *err_msg = "icmp_rr must be false (off) or true (on)";
 		  goto err;
 		}
 	      SET_OPT_FLAG(options_out, OPT_ICMP_RR);
@@ -1039,10 +1041,10 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(opt_type == sym_rr)
 	    {
-	      if(!CHECK_PARSE_INT(options_out->udp_rr, int, opt) ||
+	      if(!CHECK_PARSE_BOOL(options_out->udp_rr, opt) ||
 		 (options_out->udp_rr != 0 && options_out->udp_rr != 1))
 		{
-		  *err_msg = "udp_rr must be 0 (off) or 1 (on)";
+		  *err_msg = "udp_rr must be false (off) or true (on)";
 		  goto err;
 		}
 	      SET_OPT_FLAG(options_out, OPT_UDP_RR);

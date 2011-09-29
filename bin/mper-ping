@@ -22,7 +22,7 @@ $options.mper_port = 1
 $options.probing_method = :icmp
 $options.spacing = 0
 $options.log_path = nil  # disable logging by default
-$options.rr = 0
+$options.rr = false
 
 opts = OptionParser.new
 
@@ -94,7 +94,7 @@ end
 
 opts.on("--rr", TrueClass, 
         "enable Record Route IP option") do |v|
-  $options.rr = 1
+  $options.rr = true
 end
 
 opts.on("--dport", "=NUM", Integer,
@@ -122,7 +122,7 @@ end
 
 begin
   ARGV.replace opts.parse(*ARGV)
-  $options.rr = 0 if $options.tsps
+  $options.rr = false if $options.tsps
 rescue OptionParser::ParseError
   $stderr.puts "ERROR: " + $!.to_s
   $stderr.puts opts
