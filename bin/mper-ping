@@ -88,7 +88,8 @@ opts.on("--reply-count", "=NUM", Integer,
 end
 
 opts.on("--src", "=ADDR", String,
-        "specifies the source address to use in probes.") do |v|
+        "specifies the source address to use in probes. (The address cannot " \
+        "be spoofed)") do |v|
   $options.src_addr = v
 end
 
@@ -202,9 +203,6 @@ class ProgressOutput
     icmp_type = (result.reply_icmp_type || "-").to_s
     icmp_code = (result.reply_icmp_code || "-").to_s
     tcp_flags = (result.reply_tcp_flags || "-").to_s
-    tsps1 = result.reply_tsps_ip1 ? 
-      sprintf("%s=%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
-      "-"
     tsps1 = result.reply_tsps_ip1 ? 
       sprintf("%s=%d", result.reply_tsps_ip1, result.reply_tsps_ts1) : 
       "-"
