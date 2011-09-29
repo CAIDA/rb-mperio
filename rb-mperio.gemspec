@@ -6,7 +6,7 @@ require 'rubygems'
 
 #---------------------------------------------------------------------------
 
-MY_VERSION = "0.2.0"
+MY_VERSION = "0.3.0"
 
 MY_EXTRA_FILES = ["README", "CHANGES", "COPYING"]
 
@@ -41,6 +41,8 @@ EOF
   #s.test_file = "test/ts_wartslib.rb"
   s.has_rdoc  = false
   s.extra_rdoc_files = MY_EXTRA_FILES
+  s.executables = ["mper-ping", "mper-trace",
+                   "mper-trace-convertor", "trace.rb"]
 end
 
 #===========================================================================

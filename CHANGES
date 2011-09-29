@@ -1,3 +1,13 @@
+version 0.3.0, 2011-09-30
+  NOTE: You must run mper v0.4.0 to use all of the new features in this
+        release.
+
+  * added new sample scripts: mper-trace, mper-trace-convertor
+  * added support for IP options: prespecified timestamp and record route
+  * added setting of TTL, ICMP checksum, timeout, TOS, required reply count,
+    and source IP address to use in probes (but not for spoofing)
+  * scripts are now installed in Ruby's bin directory during gem install
+
 version 0.2.0, 2009-12-15
   * added --spacing: spacing (ms) between probes
   * added --concurrency: max targets to probe concurrently
