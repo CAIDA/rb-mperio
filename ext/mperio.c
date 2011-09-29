@@ -200,8 +200,9 @@ typedef struct {
 
 #define CHECK_PARSE_BOOL(out, opt) ((out = (RTEST(opt) ? 1 : 0)) || 1)
 
-#define CHECK_PARSE_STR(out, opt) ((rb_type(opt) == T_STRING) && \
-				   (out = RSTRING_PTR(opt)))
+#define CHECK_PARSE_STR(out, opt) (((rb_type(opt) == T_STRING) &&	\
+				    (out = RSTRING_PTR(opt))) ||        \
+				   (out = RSTRING_PTR(StringValueCStr(opt))))
 
 static VALUE cMperIO, cPingResult;
 
@@ -1019,6 +1020,11 @@ static int process_options(VALUE options, int probe_method,
 		    }
 		  SET_OPT_FLAG(options_out, OPT_ICMP_TSPS);
 		}
+	      else
+		{
+		  *err_msg = "tsps addresses must be passed as an array";
+		  goto err;
+		}
 	    }
 	  else if(opt_type == sym_cksum)
 	    {
@@ -1069,6 +1075,11 @@ static int process_options(VALUE options, int probe_method,
 			}
 		    }
 		  SET_OPT_FLAG(options_out, OPT_UDP_TSPS);
+		}
+	      else
+		{
+		  *err_msg = "tsps addresses must be passed as an array";
+		  goto err;
 		}
 	    }
 	  else if(opt_type == sym_dport)
