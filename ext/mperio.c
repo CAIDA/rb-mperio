@@ -909,7 +909,7 @@ static int process_options(VALUE options, int probe_method,
 
   for(i=0;i<opts_len-1;i+=2)
     {
-      if(&opts[i] == NULL || rb_type(opts[i]) != T_SYMBOL)
+      if(&opts[i] == NULL || NIL_P(opts[i]) || rb_type(opts[i]) != T_SYMBOL)
 	{
 	  *err_msg = 
 	    "optional arguments must be of the format: ':arg_name, arg_value'";
@@ -929,7 +929,7 @@ static int process_options(VALUE options, int probe_method,
       if(opt_type == sym_spacing)
 	{
 	  if(!CHECK_PARSE_INT(options_out->spacing, uint32_t, opt) ||
-	     options_out->spacing < 0 || options_out->spacing > UINT32_MAX)
+	     options_out->spacing > UINT32_MAX)
 	    {
 	      *err_msg = "spacing must be between 0 and 2^32";
 	      goto err;
@@ -939,7 +939,7 @@ static int process_options(VALUE options, int probe_method,
       else if(opt_type == sym_timeout)
 	{
 	  if(!CHECK_PARSE_INT(options_out->timeout, uint32_t, opt) ||
-	     options_out->timeout < 0 || options_out->timeout > UINT32_MAX)
+	     options_out->timeout > UINT32_MAX)
 	    {
 	      *err_msg = "timeout must be between 0 and 2^32";
 	      goto err;
