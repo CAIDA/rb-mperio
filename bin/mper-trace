@@ -31,7 +31,7 @@ require 'wartslib'
 
 require 'yaml'
 
-require_relative('trace.rb')
+require 'traceroute-engine'
 
 #never buffer stdout
 $stdout.sync = true

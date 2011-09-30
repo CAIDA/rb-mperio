@@ -42,7 +42,7 @@ EOF
   s.has_rdoc  = false
   s.extra_rdoc_files = MY_EXTRA_FILES
   s.executables = ["mper-ping", "mper-trace",
-                   "mper-trace-convertor", "trace.rb"]
+                   "mper-trace-convertor"]
 end
 
 #===========================================================================

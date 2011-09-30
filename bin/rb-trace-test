@@ -24,7 +24,7 @@ require 'optparse'
 
 require 'wartslib'
 
-require_relative('trace.rb')
+require 'traceroute-engine'
 
 $options = OpenStruct.new
 
