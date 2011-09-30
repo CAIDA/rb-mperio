@@ -69,6 +69,10 @@
 
 #include "mperio.h"
 
+#ifndef UINT32_MAX
+#define UINT32_MAX 0xffffffff
+#endif
+
 /*
 ** MperIO status:
 **
