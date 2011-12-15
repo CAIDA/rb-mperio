@@ -424,9 +424,10 @@ static int fdp_list(void *item, void *param)
  */
 int scamper_fds_poll(struct timeval *timeout)
 {
-  fd_set rfds, *rfdsp;
-  fd_set wfds, *wfdsp;
+  fd_set rfds, *rfdsp, rfds_;
+  fd_set wfds, *wfdsp, wfds_;
   int count, nfds = -1;
+  struct timeval timeout_;
 
   /* concat any new fds to monitor now */
   dlist_foreach(read_queue, fdp_list, read_fds);
@@ -448,8 +449,13 @@ int scamper_fds_poll(struct timeval *timeout)
     }
   else
 #endif
-  if((count = select(nfds+1, rfdsp, wfdsp, NULL, timeout)) < 0)
+  again:
+  rfds_ = *rfdsp;
+  wfds_ = *wfdsp;
+  timeout_ = *timeout;
+  if((count = select(nfds+1, &rfds_, &wfds_, NULL, &timeout_)) < 0)
     {
+      if (errno == EINTR) goto again;
       printerror(errno, strerror, __func__, "select failed");
       return -1;
     }
