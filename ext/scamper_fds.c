@@ -424,10 +424,10 @@ static int fdp_list(void *item, void *param)
  */
 int scamper_fds_poll(struct timeval *timeout)
 {
-  fd_set rfds, *rfdsp, rfds_;
-  fd_set wfds, *wfdsp, wfds_;
+  fd_set rfds, *rfdsp, rfds_, *rfdsp_=NULL;
+  fd_set wfds, *wfdsp, wfds_, *wfdsp_=NULL;
   int count, nfds = -1;
-  struct timeval timeout_;
+  struct timeval timeout_, *timeoutp_=NULL;
 
   /* concat any new fds to monitor now */
   dlist_foreach(read_queue, fdp_list, read_fds);
@@ -450,10 +450,10 @@ int scamper_fds_poll(struct timeval *timeout)
   else
 #endif
   again:
-  rfds_ = *rfdsp;
-  wfds_ = *wfdsp;
-  timeout_ = *timeout;
-  if((count = select(nfds+1, &rfds_, &wfds_, NULL, &timeout_)) < 0)
+  if(rfdsp) { rfds_ = *rfdsp; rfdsp_ = &rfds_; }
+  if(wfdsp) { wfds_ = *wfdsp; wfdsp_ = &wfds_; }
+  if(timeout) { timeout_ = *timeout; timeoutp_ = &timeout_; }
+  if((count = select(nfds+1, rfdsp_, wfdsp_, NULL, timeoutp_)) < 0)
     {
       if (errno == EINTR) goto again;
       printerror(errno, strerror, __func__, "select failed");
@@ -466,8 +466,8 @@ int scamper_fds_poll(struct timeval *timeout)
   /* if there are fds to check, then check them */
   if(count > 0)
     {
-      fd_set_check(rfdsp, read_fds, &count);
-      fd_set_check(wfdsp, write_fds, &count);
+      fd_set_check(rfdsp_, read_fds, &count);
+      fd_set_check(wfdsp_, write_fds, &count);
     }
 
   return 0;
