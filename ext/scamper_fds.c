@@ -448,6 +448,7 @@ int scamper_fds_poll(struct timeval *timeout)
       count = 0;
     }
   else
+    {
 #endif
   again:
   if(rfdsp) { rfds_ = *rfdsp; rfdsp_ = &rfds_; }
@@ -459,6 +460,9 @@ int scamper_fds_poll(struct timeval *timeout)
       printerror(errno, strerror, __func__, "select failed");
       return -1;
     }
+#ifdef _WIN32
+    }
+#endif
 
   /* reap any expired fds */
   fd_refcnt_0_reap();
