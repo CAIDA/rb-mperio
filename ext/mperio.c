@@ -206,7 +206,7 @@ typedef struct {
 
 #define CHECK_PARSE_STR(out, opt) (((rb_type(opt) == T_STRING) &&	\
 				    (out = RSTRING_PTR(opt))) ||        \
-				   (out = RSTRING_PTR(StringValueCStr(opt))))
+				   (out = RSTRING_PTR(StringValue(opt))))
 
 static VALUE cMperIO, cPingResult;
 
@@ -974,7 +974,7 @@ static int process_options(VALUE options, int probe_method,
 	{
 	  if(!CHECK_PARSE_INT(options_out->reply_count, uint16_t, opt))
 	    {
-	      *err_msg = "reply cnt must be between 0 and 2^16";
+	      *err_msg = "reply_count must be between 0 and 2^16";
 	      goto err;
 	    }
 	  SET_OPT_FLAG(options_out, OPT_REPLY_COUNT);
