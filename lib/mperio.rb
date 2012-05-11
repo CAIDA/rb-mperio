@@ -69,7 +69,7 @@ class MperIO
   #   stop()
   #   ping_icmp(reqnum, dest, ...)
   #   ping_icmp_indir(reqnum, dest, hop, cksum, spacing=0)
-  #   ping_tcp(reqnum, dest, dport, ...)
+  #   ping_tcp(reqnum, dest, ...)
   #   ping_udp(reqnum, dest, ...)
   #   ping_raw_command(command)
   #
