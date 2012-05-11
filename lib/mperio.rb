@@ -67,13 +67,48 @@ class MperIO
   #   delegate=(delegate)
   #   start()
   #   stop()
-  #   ping_icmp(reqnum, dest, spacing=0, tsps=nil)
-  #   ping_icmp_indir(reqnum, dest, hop, cksum, spacing=0, tsps=nil)
-  #   ping_tcp(reqnum, dest, dport, spacing=0)
-  #   ping_udp(reqnum, dest, spacing=0)
+  #   ping_icmp(reqnum, dest, ...)
+  #   ping_icmp_indir(reqnum, dest, hop, cksum, spacing=0)
+  #   ping_tcp(reqnum, dest, dport, ...)
+  #   ping_udp(reqnum, dest, ...)
   #   ping_raw_command(command)
   #
-  # Private methods implemented in C extension:
+  # The ping_icmp, ping_tcp, and ping_udp methods can take an arbitrary
+  # number of trailing options (as indicated above with "...").  These
+  # options come in pairs, of the form:
+  #
+  #    :option_name, value
+  #
+  # where ':option_name' is a symbol giving the name of the option, and
+  # 'value' is a Ruby number, string, etc.
+  #
+  # Supported options for all protocols:
+  #
+  #    :spacing, UINT32
+  #    :timeout, UINT32
+  #    :ttl, UINT8             # 1 .. 255
+  #    :tos, UINT8
+  #    :reply_count, UINT16
+  #    :src_addr, STRING
+  #
+  # Additional options for ICMP:
+  #
+  #    :rr, BOOL
+  #    :tsps, ARRAY    # max of 4 addresses
+  #    :cksum, UINT16
+  #
+  # Additional options for UDP:
+  #
+  #    :rr, BOOL
+  #    :tsps, ARRAY    # max of 4 addresses
+  #    :dport, UINT16
+  #
+  # Additional options for TCP:
+  #
+  #    :dport, UINT16
+  #
+  # ......................................................................
+  # Private methods implemented in the C extension:
   #
   #   allocate_scamper_fdn(fd)
   #   deallocate_scamper_fdn(fd)
