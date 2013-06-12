@@ -654,9 +654,9 @@ class TraceTask
 
   def is_method(method, result)
     case method
-    when :icmp:
+    when :icmp
         return result.icmp_reply?
-    when :tcp:
+    when :tcp
         return result.tcp_reply?
     end
   end

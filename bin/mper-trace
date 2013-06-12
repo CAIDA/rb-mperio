@@ -80,9 +80,9 @@ opts.on("-c", "--confidence=NUM", Integer,
         "level (95% or 99%) to be sure the trace has seen all interfaces "\
         "that will reply for that hop.") do |v|
   case v
-  when 95:
+  when 95
     $options.confidene = 0
-  when 99:
+  when 99
     $options.confidence = 1
   else
     raise OptionParser::ParseError
@@ -184,11 +184,11 @@ opts.on("-P", "--method=STR", String,
         "udp: probe with UDP packets, or tcp: TCP ACK") do |v|
   $stderr.puts "v: #{v}"
   case v
-  when "icmp":
+  when "icmp"
       $options.probe_method = :icmp
-  when "udp":
+  when "udp"
       $options.probe_method = :udp
-  when "tcp":
+  when "tcp"
       $options.probe_method = :tcp
   else
     raise OptionParser::ParseError
