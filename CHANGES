@@ -1,3 +1,6 @@
+version 0.3.3, 2013-06-12
+  * fixed Ruby 1.9 incompatibilities
+
 version 0.3.2, 2012-05-10
   * fixed bug in handling of :src_addr option that could cause a segfault
 
