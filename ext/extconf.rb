@@ -17,7 +17,7 @@
 ##===========================================================================
 
 require 'rbconfig'
-Config::MAKEFILE_CONFIG['CFLAGS'] += " -DNDEBUG -Wall"
+RbConfig::MAKEFILE_CONFIG['CFLAGS'] += " -DNDEBUG -Wall"
 
 require 'mkmf'
 
