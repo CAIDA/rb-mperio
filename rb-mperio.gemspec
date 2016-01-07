@@ -3,6 +3,7 @@
 # $Id: rb-wartslib.gemspec,v 1.35 2009/04/24 22:59:06 youngh Exp $
 
 require 'rubygems'
+require 'rubygems/package'
 
 #---------------------------------------------------------------------------
 
@@ -50,7 +51,7 @@ end
 if $0 == __FILE__
   gem_name = "rb-mperio-#{MY_VERSION}.gem"
   File.delete gem_name if File.exists? gem_name
-  Gem::Builder.new(spec).build
+  Gem::Package.build(spec)
 
   tar_name = "rb-mperio-#{MY_VERSION}.tar"
   puts "creating #{tar_name}.gz"
